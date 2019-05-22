@@ -72,10 +72,11 @@ func (self *log) Init(dir string, bdict bseqInterface) {
 	self.bseqMap = bdict
 	logPath := dir
 
-	if Testing() {
+	mode := Config().String("sys::Mode")
+	if mode != "prod" && Testing() {
+		self.debug = true
 		return
 	}
-	mode := Config().String("sys::Mode")
 	if mode != "prod" {
 		self.debug = true
 	}

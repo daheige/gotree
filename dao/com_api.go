@@ -63,6 +63,7 @@ func (self *ComApi) Gotree(child interface{}) *ComApi {
 
 //TestOn 单元测试 开启
 func (self *ComApi) TestOn() {
+	logOn()
 	mode := helper.Config().String("sys::Mode")
 	if mode == "prod" {
 		helper.Exit("ComApi-TestOn Unit test api is not available in production environments")

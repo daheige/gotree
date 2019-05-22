@@ -41,6 +41,7 @@ func (self *ComCache) Gotree(child interface{}) *ComCache {
 
 //TestOn 单元测试 开启
 func (self *ComCache) TestOn() {
+	logOn()
 	mode := helper.Config().String("sys::Mode")
 	if mode == "prod" {
 		helper.Exit("ComCache-TestOn Unit test cache is not available in production environments")

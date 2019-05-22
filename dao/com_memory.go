@@ -45,6 +45,7 @@ func (self *ComMemory) Gotree(child interface{}) *ComMemory {
 
 //TestOn 单元测试 开启
 func (self *ComMemory) TestOn() {
+	logOn()
 	mode := helper.Config().String("sys::Mode")
 	if mode == "prod" {
 		helper.Exit("ComMemory-TestOn-mode Unit test model is not available in production environments")

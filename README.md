@@ -94,7 +94,7 @@ $ go run $GOPATH/src/learning/business/unit/qps_press/main.go 10000
 ### 描述
 + Business 主要用于逻辑功能处理等。均衡负载部署多台，为网关提供服务。 目录结构在 learning/business。
 + Dao 主要用于数据功能处理，组织低级数据提供给上游 business。Dao 基于容器设计，开发 Com 挂载不同的 Dao 容器上。负载均衡方式较多，可根据数据分布来设计。可通过配置来开启 Com(Component Object Model)。目录结构在 learning/dao。
-+ Protocol 通信协议 business_cmd/value 作用于 Api网关和 Business 通信。 dso_cmd/value 作用于 Business 和 Dao 通信。 目录结构在 learning/protocol。
++ Protocol 通信协议 business_cmd/value 作用于 Api网关和 Business 通信。 dao_cmd/value 作用于 Business 和 Dao 通信。 目录结构在 learning/protocol。
 
 > 3台网关、2台business、3台dao 组成的集群
 >

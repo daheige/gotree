@@ -41,6 +41,7 @@ func (self *ComOther) DaoInit() {
 
 //TestOn 单元测试 开启
 func (self *ComOther) TestOn() {
+	logOn()
 	mode := helper.Config().String("sys::Mode")
 	if mode == "prod" {
 		helper.Exit("ComOther-TestOn Unit test model is not available in production environments")

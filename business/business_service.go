@@ -63,6 +63,10 @@ func (self *BusinessService) ReqHeader(k string) string {
 }
 
 func (self *BusinessService) TestOn(testDaos ...string) {
+	var client *remote_call.RpcClient
+	logOn()
+	_ssl.GetComponent(&client)
+	client.Start()
 	mode := helper.Config().String("sys::Mode")
 	//生产环境不可进行单元测试
 	if mode == "prod" {

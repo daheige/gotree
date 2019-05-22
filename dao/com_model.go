@@ -87,6 +87,7 @@ func (self *ComModel) Conn() Conn {
 
 //TestOn 单元测试 开启
 func (self *ComModel) TestOn() {
+	logOn()
 	mode := helper.Config().String("sys::Mode")
 	if mode == "prod" {
 		helper.Exit("ComModel-TestOn Unit test model is not available in production environments")
