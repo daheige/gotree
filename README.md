@@ -15,6 +15,7 @@ gotree 是一个垂直分布式框架。 gotree 的目标是轻松开发分布�
 * 单元测试
 * 督程
 * 一致性哈希、主从、随机、均衡等负载方式
+* 正统的 oop 设计模式
 
 ## 介绍
 - [快速使用](#快速使用)
@@ -34,7 +35,7 @@ gotree 是一个垂直分布式框架。 gotree 的目标是轻松开发分布�
 - [ComCache](#cache)
 - [ComMemory](#memory)
 - [ComApi](#api)
-- [配置文件](#helper)
+- [Config](#helper)
 - [单元测试](#unit)
 - [命令](#command)
 - [分布示例](#dispersed)
@@ -703,22 +704,6 @@ $ go run main.go
 
 ### unit
 ```go
-    /* 
-        business 单元测试
-        代码目录  learning/business/unit
-        测试service对象，请在本机开启dao 进程。 TestOn : "Com组件名字:id"
-        TestOn 函数内部有引用框架，初始化、建立连接等。填写Com 即可使用。
-        执行命令 go test -v -count=1 -run TestProduct $GOPATH/src/learning/business/unit/service_test.go
-    */
-    func TestProduct(t *testing.T) {
-        service := new(service.Product).Gotree()
-        //开启单元测试 填写 com
-        service.TestOn("Product:1", "User:1", "Order:1")
-        
-        t.Log(service.Store())
-        t.Log(service.Shopping(1, 1))
-    }
-
     /*
         dao 单元测试
         代码目录  learning/dao/unit
@@ -742,6 +727,22 @@ $ go run main.go
         t.Log(cache.TestGet())
         t.Log(memory.TestGet())
         t.Log(model.Gets([]int64{1, 2, 3, 4}))
+    }
+    
+    /* 
+        business 单元测试
+        代码目录  learning/business/unit
+        测试service对象，请在本机开启dao 进程。 TestOn : "Com组件名字:id"
+        TestOn 函数内部有引用框架，初始化、建立连接等。填写Com 即可使用。
+        执行命令 go test -v -count=1 -run TestProduct $GOPATH/src/learning/business/unit/service_test.go
+    */
+    func TestProduct(t *testing.T) {
+        service := new(service.Product).Gotree()
+        //开启单元测试 填写 com
+        service.TestOn("Product:1", "User:1", "Order:1")
+        
+        t.Log(service.Store())
+        t.Log(service.Shopping(1, 1))
     }
 ```
 
