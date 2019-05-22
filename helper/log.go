@@ -30,9 +30,9 @@ const (
 )
 
 const (
-	__LOG_ERROR_DIR_NAME = "error" //错误日志目录名
-	__LOG_WARN_DIR_NAME  = "warn"  //警告日志目录名
-	__LOG_INFO_DIR_NAME  = "info"  //普通日志目录名
+	__LOG_ERROR_DIR_NAME = "error"  //错误日志目录名
+	__LOG_WARN_DIR_NAME  = "warn"   //警告日志目录名
+	__LOG_INFO_DIR_NAME  = "notice" //普通日志目录名
 )
 
 type log struct {
