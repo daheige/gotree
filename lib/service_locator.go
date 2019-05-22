@@ -34,7 +34,7 @@ func (self *ServiceLocator) Gotree() *ServiceLocator {
 }
 
 func (self *ServiceLocator) CheckService(com interface{}) bool {
-	return self.dict.Check(reflect.TypeOf(com).Elem().Name())
+	return self.dict.Check(reflect.TypeOf(com).Elem().String())
 }
 
 //加入服务
@@ -43,19 +43,19 @@ func (self *ServiceLocator) AddService(obj interface{}) {
 	if t.Kind() != reflect.Ptr {
 		helper.Log().Error("AddComponent != reflect.Ptr")
 	}
-	self.dict.Set(t.Elem().Name(), obj)
+	self.dict.Set(t.Elem().String(), obj)
 }
 
 //移除服务
 func (self *ServiceLocator) RemoveService(obj interface{}) {
 	t := reflect.TypeOf(obj)
-	self.dict.Del(t.Name())
+	self.dict.Del(t.String())
 }
 
 //获取服务
 func (self *ServiceLocator) Service(obj interface{}) error {
 	t := reflect.TypeOf(obj)
-	return self.dict.Get(t.Elem().Elem().Name(), obj)
+	return self.dict.Get(t.Elem().Elem().String(), obj)
 }
 
 //广播定位器内所有实现method的方法

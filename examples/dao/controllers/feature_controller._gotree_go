@@ -4,7 +4,6 @@ import (
 	"examples/dao/sources/api"
 	"examples/dao/sources/cache"
 	"examples/dao/sources/memory"
-	"examples/dao/sources/models/order"
 	"examples/protocol/dao_cmd"
 	"fmt"
 	"time"
@@ -55,15 +54,11 @@ func (self *FeatureController) Course(cmd dao_cmd.Course, result *helper.VoidVal
 		cacheCourse  *cache.Course  //redis数据源
 		memoryCourse *memory.Course //内存数据源
 		geoApi       *api.TaoBaoIp  //http数据源, 第三方接口 or 其他内部系统接口
-		mOrder       *order.Order
-		mOrderLog    *order.OrderLog
 	)
 	//服务定位器 获取实体对象
 	self.Cache(&cacheCourse)
 	self.Memory(&memoryCourse)
 	self.Api(&geoApi)
-	self.Model(&mOrder)
-	self.Model(&mOrderLog)
 
 	//redis写读
 	cacheCourse.TestSet(cmd.CourseInt, cmd.CourseString)
@@ -81,15 +76,6 @@ func (self *FeatureController) Course(cmd dao_cmd.Course, result *helper.VoidVal
 		time.Sleep(1 * time.Second)
 		helper.Log().Notice("FeatureQueue")
 		return nil
-	})
-
-	//事务
-	self.Transaction(func() error {
-		id, e := mOrder.Add(1, 1)
-		if e != nil {
-			return e
-		}
-		return mOrderLog.Add(id, "add")
 	})
 	return
 }
