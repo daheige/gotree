@@ -1,26 +1,575 @@
-// Copyright 2014 beego Author. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package gtorm
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"math/big"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// Driver define database driver
+type Driver interface {
+	Name() string
+	Type() DriverType
+}
+
+// Fielder define field info
+type Fielder interface {
+	String() string
+	FieldType() int
+	SetRaw(interface{}) error
+	RawValue() interface{}
+}
+
+// Ormer define the orm interface
+type Ormer interface {
+	// switch to another registered database driver by given name.
+	Using(name string) error
+	Begin() error
+	Commit() error
+	Rollback() error
+	Raw(query string, args ...interface{}) RawSeter
+	RawCallBack(func(string, []interface{}))
+	Driver() Driver
+}
+
+type QuerySeter interface {
+}
+
+// RawPreparer raw query statement
+type RawPreparer interface {
+	Exec(...interface{}) (sql.Result, error)
+	Close() error
+}
+
+type RawSeter interface {
+	Exec() (sql.Result, error)
+	QueryRow(containers ...interface{}) error
+	QueryRows(containers ...interface{}) (int64, error)
+	Prepare() (RawPreparer, error)
+}
+
+// stmtQuerier statement querier
+type stmtQuerier interface {
+	Close() error
+	Exec(args ...interface{}) (sql.Result, error)
+	Query(args ...interface{}) (*sql.Rows, error)
+	QueryRow(args ...interface{}) *sql.Row
+}
+
+// db querier
+type dbQuerier interface {
+	Prepare(query string) (*sql.Stmt, error)
+	Exec(query string, args ...interface{}) (sql.Result, error)
+	Query(query string, args ...interface{}) (*sql.Rows, error)
+	QueryRow(query string, args ...interface{}) *sql.Row
+}
+
+// transaction beginner
+type txer interface {
+	Begin() (*sql.Tx, error)
+}
+
+// transaction ending
+type txEnder interface {
+	Commit() error
+	Rollback() error
+}
+
+// base database struct
+type dbBaser interface {
+	OperatorSQL(string) string
+	TableQuote() string
+	ReplaceMarks(*string)
+	HasReturningID(*modelInfo, *string) bool
+	TimeFromDB(*time.Time, *time.Location)
+	TimeToDB(*time.Time, *time.Location)
+	ShowTablesQuery() string
+	ShowColumnsQuery(string) string
+	setval(dbQuerier, *modelInfo, []string) error
+}
+
+const (
+	DebugQueries = iota
+)
+
+var (
+	DefaultRowsLimit = 1000
+	DefaultRelsDepth = 2
+	DefaultTimeLoc   = time.Local
+	ErrTxHasBegan    = errors.New("<Ormer.Begin> transaction already begin")
+	ErrTxDone        = errors.New("<Ormer.Commit/Rollback> transaction not begin")
+	ErrMultiRows     = errors.New("<QuerySeter> return multi rows")
+	ErrNoRows        = errors.New("<QuerySeter> no row found")
+	ErrStmtClosed    = errors.New("<QuerySeter> stmt already closed")
+	ErrArgs          = errors.New("<Ormer> args error may be empty")
+	ErrNotImplement  = errors.New("have not implement")
+)
+
+// Params stores the Params
+type Params map[string]interface{}
+
+// ParamsList stores paramslist
+type ParamsList []interface{}
+
+type orm struct {
+	alias       *alias
+	db          dbQuerier
+	isTx        bool
+	rawCallBack func(string, []interface{})
+}
+
+var _ Ormer = new(orm)
+
+// RawCallBack
+func (o *orm) RawCallBack(rawCallBack func(string, []interface{})) {
+	o.rawCallBack = rawCallBack
+}
+
+// get model info and model reflect value
+func (o *orm) getMiInd(md interface{}, needPtr bool) (mi *modelInfo, ind reflect.Value) {
+	val := reflect.ValueOf(md)
+	ind = reflect.Indirect(val)
+	typ := ind.Type()
+	if needPtr && val.Kind() != reflect.Ptr {
+		panic(fmt.Errorf("<Ormer> cannot use non-ptr model struct `%s`", getFullName(typ)))
+	}
+	name := getFullName(typ)
+	if mi, ok := modelCache.getByFullName(name); ok {
+		return mi, ind
+	}
+	panic(fmt.Errorf("<Ormer> table: `%s` not found, make sure it was registered with `RegisterModel()`", name))
+}
+
+// get field info from model info by given field name
+func (o *orm) getFieldInfo(mi *modelInfo, name string) *fieldInfo {
+	fi, ok := mi.fields.GetByAny(name)
+	if !ok {
+		panic(fmt.Errorf("<Ormer> cannot find field `%s` for model `%s`", name, mi.fullName))
+	}
+	return fi
+}
+
+// set auto pk field
+func (o *orm) setPk(mi *modelInfo, ind reflect.Value, id int64) {
+	if mi.fields.pk.auto {
+		if mi.fields.pk.fieldType&IsPositiveIntegerField > 0 {
+			ind.FieldByIndex(mi.fields.pk.fieldIndex).SetUint(uint64(id))
+		} else {
+			ind.FieldByIndex(mi.fields.pk.fieldIndex).SetInt(id)
+		}
+	}
+}
+
+// get QuerySeter for related models to md model
+func (o *orm) queryRelated(md interface{}, name string) (*modelInfo, *fieldInfo, reflect.Value, QuerySeter) {
+	mi, ind := o.getMiInd(md, true)
+	fi := o.getFieldInfo(mi, name)
+
+	_, _, exist := getExistPk(mi, ind)
+	if !exist {
+		panic(ErrMissPK)
+	}
+
+	var qs *querySet
+
+	switch fi.fieldType {
+	case RelOneToOne, RelForeignKey, RelManyToMany:
+		if !fi.inModel {
+			break
+		}
+		qs = o.getRelQs(md, mi, fi)
+	case RelReverseOne, RelReverseMany:
+		if !fi.inModel {
+			break
+		}
+		qs = o.getReverseQs(md, mi, fi)
+	}
+
+	if qs == nil {
+		panic(fmt.Errorf("<Ormer> name `%s` for model `%s` is not an available rel/reverse field", md, name))
+	}
+
+	return mi, fi, ind, qs
+}
+
+// get reverse relation QuerySeter
+func (o *orm) getReverseQs(md interface{}, mi *modelInfo, fi *fieldInfo) *querySet {
+	switch fi.fieldType {
+	case RelReverseOne, RelReverseMany:
+	default:
+		panic(fmt.Errorf("<Ormer> name `%s` for model `%s` is not an available reverse field", fi.name, mi.fullName))
+	}
+
+	var q *querySet
+
+	if fi.fieldType == RelReverseMany && fi.reverseFieldInfo.mi.isThrough {
+		q = newQuerySet(o, fi.relModelInfo).(*querySet)
+		//q.cond = NewCondition().And(fi.reverseFieldInfoM2M.column+ExprSep+fi.reverseFieldInfo.column, md)
+	} else {
+		q = newQuerySet(o, fi.reverseFieldInfo.mi).(*querySet)
+		//q.cond = NewCondition().And(fi.reverseFieldInfo.column, md)
+	}
+
+	return q
+}
+
+// get relation QuerySeter
+func (o *orm) getRelQs(md interface{}, mi *modelInfo, fi *fieldInfo) *querySet {
+	switch fi.fieldType {
+	case RelOneToOne, RelForeignKey, RelManyToMany:
+	default:
+		panic(fmt.Errorf("<Ormer> name `%s` for model `%s` is not an available rel field", fi.name, mi.fullName))
+	}
+
+	q := newQuerySet(o, fi.relModelInfo).(*querySet)
+	//q.cond = NewCondition()
+
+	if fi.fieldType == RelManyToMany {
+		//q.cond = q.cond.And(fi.reverseFieldInfoM2M.column+ExprSep+fi.reverseFieldInfo.column, md)
+	} else {
+		//q.cond = q.cond.And(fi.reverseFieldInfo.column, md)
+	}
+
+	return q
+}
+
+// switch to another registered database driver by given name.
+func (o *orm) Using(name string) error {
+	o.rawCallBack = nil
+	if o.isTx {
+		panic(fmt.Errorf("<Ormer.Using> transaction has been start, cannot change db"))
+	}
+	if al, ok := dataBaseCache.get(name); ok {
+		o.alias = al
+		o.db = al.DB
+	} else {
+		return fmt.Errorf("<Ormer.Using> unknown db alias name `%s`", name)
+	}
+	return nil
+}
+
+// begin transaction
+func (o *orm) Begin() error {
+	if o.isTx {
+		return ErrTxHasBegan
+	}
+	var tx *sql.Tx
+	tx, err := o.db.(txer).Begin()
+	if err != nil {
+		return err
+	}
+	o.isTx = true
+	o.db = tx
+	return nil
+}
+
+// commit transaction
+func (o *orm) Commit() error {
+	if !o.isTx {
+		return ErrTxDone
+	}
+	err := o.db.(txEnder).Commit()
+	if err == nil {
+		o.isTx = false
+		o.Using(o.alias.Name)
+	} else if err == sql.ErrTxDone {
+		return ErrTxDone
+	}
+	return err
+}
+
+// rollback transaction
+func (o *orm) Rollback() error {
+	if !o.isTx {
+		return ErrTxDone
+	}
+	err := o.db.(txEnder).Rollback()
+	if err == nil {
+		o.isTx = false
+		o.Using(o.alias.Name)
+	} else if err == sql.ErrTxDone {
+		return ErrTxDone
+	}
+	return err
+}
+
+// return a raw query seter for raw sql string.
+func (o *orm) Raw(query string, args ...interface{}) RawSeter {
+	if o.rawCallBack != nil {
+		o.rawCallBack(query, args)
+	}
+	return newRawSet(o, query, args)
+}
+
+// return current using database Driver
+func (o *orm) Driver() Driver {
+	return driver(o.alias.Name)
+}
+
+// NewOrm create new orm
+func newOrm() Ormer {
+	BootStrap() // execute only once
+	return new(orm)
+}
+
+// StrTo is the target string
+type StrTo string
+
+// Set string
+func (f *StrTo) Set(v string) {
+	if v != "" {
+		*f = StrTo(v)
+	} else {
+		f.Clear()
+	}
+}
+
+// Clear string
+func (f *StrTo) Clear() {
+	*f = StrTo(0x1E)
+}
+
+// Exist check string exist
+func (f StrTo) Exist() bool {
+	return string(f) != string(0x1E)
+}
+
+// Bool string to bool
+func (f StrTo) Bool() (bool, error) {
+	return strconv.ParseBool(f.String())
+}
+
+// Float32 string to float32
+func (f StrTo) Float32() (float32, error) {
+	v, err := strconv.ParseFloat(f.String(), 32)
+	return float32(v), err
+}
+
+// Float64 string to float64
+func (f StrTo) Float64() (float64, error) {
+	return strconv.ParseFloat(f.String(), 64)
+}
+
+// Int string to int
+func (f StrTo) Int() (int, error) {
+	v, err := strconv.ParseInt(f.String(), 10, 32)
+	return int(v), err
+}
+
+// Int8 string to int8
+func (f StrTo) Int8() (int8, error) {
+	v, err := strconv.ParseInt(f.String(), 10, 8)
+	return int8(v), err
+}
+
+// Int16 string to int16
+func (f StrTo) Int16() (int16, error) {
+	v, err := strconv.ParseInt(f.String(), 10, 16)
+	return int16(v), err
+}
+
+// Int32 string to int32
+func (f StrTo) Int32() (int32, error) {
+	v, err := strconv.ParseInt(f.String(), 10, 32)
+	return int32(v), err
+}
+
+// Int64 string to int64
+func (f StrTo) Int64() (int64, error) {
+	v, err := strconv.ParseInt(f.String(), 10, 64)
+	if err != nil {
+		i := new(big.Int)
+		ni, ok := i.SetString(f.String(), 10) // octal
+		if !ok {
+			return v, err
+		}
+		return ni.Int64(), nil
+	}
+	return v, err
+}
+
+// Uint string to uint
+func (f StrTo) Uint() (uint, error) {
+	v, err := strconv.ParseUint(f.String(), 10, 32)
+	return uint(v), err
+}
+
+// Uint8 string to uint8
+func (f StrTo) Uint8() (uint8, error) {
+	v, err := strconv.ParseUint(f.String(), 10, 8)
+	return uint8(v), err
+}
+
+// Uint16 string to uint16
+func (f StrTo) Uint16() (uint16, error) {
+	v, err := strconv.ParseUint(f.String(), 10, 16)
+	return uint16(v), err
+}
+
+// Uint32 string to uint31
+func (f StrTo) Uint32() (uint32, error) {
+	v, err := strconv.ParseUint(f.String(), 10, 32)
+	return uint32(v), err
+}
+
+// Uint64 string to uint64
+func (f StrTo) Uint64() (uint64, error) {
+	v, err := strconv.ParseUint(f.String(), 10, 64)
+	if err != nil {
+		i := new(big.Int)
+		ni, ok := i.SetString(f.String(), 10)
+		if !ok {
+			return v, err
+		}
+		return ni.Uint64(), nil
+	}
+	return v, err
+}
+
+// String string to string
+func (f StrTo) String() string {
+	if f.Exist() {
+		return string(f)
+	}
+	return ""
+}
+
+// ToStr interface to string
+func ToStr(value interface{}, args ...int) (s string) {
+	switch v := value.(type) {
+	case bool:
+		s = strconv.FormatBool(v)
+	case float32:
+		s = strconv.FormatFloat(float64(v), 'f', argInt(args).Get(0, -1), argInt(args).Get(1, 32))
+	case float64:
+		s = strconv.FormatFloat(v, 'f', argInt(args).Get(0, -1), argInt(args).Get(1, 64))
+	case int:
+		s = strconv.FormatInt(int64(v), argInt(args).Get(0, 10))
+	case int8:
+		s = strconv.FormatInt(int64(v), argInt(args).Get(0, 10))
+	case int16:
+		s = strconv.FormatInt(int64(v), argInt(args).Get(0, 10))
+	case int32:
+		s = strconv.FormatInt(int64(v), argInt(args).Get(0, 10))
+	case int64:
+		s = strconv.FormatInt(v, argInt(args).Get(0, 10))
+	case uint:
+		s = strconv.FormatUint(uint64(v), argInt(args).Get(0, 10))
+	case uint8:
+		s = strconv.FormatUint(uint64(v), argInt(args).Get(0, 10))
+	case uint16:
+		s = strconv.FormatUint(uint64(v), argInt(args).Get(0, 10))
+	case uint32:
+		s = strconv.FormatUint(uint64(v), argInt(args).Get(0, 10))
+	case uint64:
+		s = strconv.FormatUint(v, argInt(args).Get(0, 10))
+	case string:
+		s = v
+	case []byte:
+		s = string(v)
+	default:
+		s = fmt.Sprintf("%v", v)
+	}
+	return s
+}
+
+// ToInt64 interface to int64
+func ToInt64(value interface{}) (d int64) {
+	val := reflect.ValueOf(value)
+	switch value.(type) {
+	case int, int8, int16, int32, int64:
+		d = val.Int()
+	case uint, uint8, uint16, uint32, uint64:
+		d = int64(val.Uint())
+	default:
+		panic(fmt.Errorf("ToInt64 need numeric not `%T`", value))
+	}
+	return
+}
+
+// snake string, XxYy to xx_yy , XxYY to xx_yy
+func snakeString(s string) string {
+	data := make([]byte, 0, len(s)*2)
+	j := false
+	num := len(s)
+	for i := 0; i < num; i++ {
+		d := s[i]
+		if i > 0 && d >= 'A' && d <= 'Z' && j {
+			data = append(data, '_')
+		}
+		if d != '_' {
+			j = true
+		}
+		data = append(data, d)
+	}
+	return strings.ToLower(string(data[:]))
+}
+
+// camel string, xx_yy to XxYy
+func camelString(s string) string {
+	data := make([]byte, 0, len(s))
+	flag, num := true, len(s)-1
+	for i := 0; i <= num; i++ {
+		d := s[i]
+		if d == '_' {
+			flag = true
+			continue
+		} else if flag {
+			if d >= 'a' && d <= 'z' {
+				d = d - 32
+			}
+			flag = false
+		}
+		data = append(data, d)
+	}
+	return string(data[:])
+}
+
+type argString []string
+
+// get string by index from string slice
+func (a argString) Get(i int, args ...string) (r string) {
+	if i >= 0 && i < len(a) {
+		r = a[i]
+	} else if len(args) > 0 {
+		r = args[0]
+	}
+	return
+}
+
+type argInt []int
+
+// get int by index from int slice
+func (a argInt) Get(i int, args ...int) (r int) {
+	if i >= 0 && i < len(a) {
+		r = a[i]
+	}
+	if len(args) > 0 {
+		r = args[0]
+	}
+	return
+}
+
+// parse time to string with location
+func timeParse(dateString, format string) (time.Time, error) {
+	tp, err := time.ParseInLocation(format, dateString, DefaultTimeLoc)
+	return tp, err
+}
+
+// get pointer indirect type
+func indirectType(v reflect.Type) reflect.Type {
+	switch v.Kind() {
+	case reflect.Ptr:
+		return indirectType(v.Elem())
+	default:
+		return v
+	}
+}
 
 // raw sql string prepared statement
 type rawPrepare struct {
@@ -52,11 +601,7 @@ func newRawPreparer(rs *rawSet) (RawPreparer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if Debug {
-		o.stmt = newStmtQueryLog(rs.orm.alias, st, query)
-	} else {
-		o.stmt = st
-	}
+	o.stmt = st
 	return o, nil
 }
 
@@ -852,6 +1397,80 @@ func newRawSet(orm *orm, query string, args []interface{}) RawSeter {
 	o := new(rawSet)
 	o.query = query
 	o.args = args
+	o.orm = orm
+	return o
+}
+
+type colValue struct {
+	value int64
+	opt   operator
+}
+
+type operator int
+
+// define Col operations
+const (
+	ColAdd operator = iota
+	ColMinus
+	ColMultiply
+	ColExcept
+)
+
+// ColValue do the field raw changes. e.g Nums = Nums + 10. usage:
+// 	Params{
+// 		"Nums": ColValue(Col_Add, 10),
+// 	}
+func ColValue(opt operator, value interface{}) interface{} {
+	switch opt {
+	case ColAdd, ColMinus, ColMultiply, ColExcept:
+	default:
+		panic(fmt.Errorf("orm.ColValue wrong operator"))
+	}
+	v, err := StrTo(ToStr(value)).Int64()
+	if err != nil {
+		panic(fmt.Errorf("orm.ColValue doesn't support non string/numeric type, %s", err))
+	}
+	var val colValue
+	val.value = v
+	val.opt = opt
+	return val
+}
+
+// real query struct
+type querySet struct {
+	mi       *modelInfo
+	related  []string
+	relDepth int
+	distinct bool
+	orm      *orm
+}
+
+var _ QuerySeter = new(querySet)
+
+// set relation model to query together.
+// it will query relation models and assign to parent model.
+func (o querySet) RelatedSel(params ...interface{}) QuerySeter {
+	if len(params) == 0 {
+		o.relDepth = DefaultRelsDepth
+	} else {
+		for _, p := range params {
+			switch val := p.(type) {
+			case string:
+				o.related = append(o.related, val)
+			case int:
+				o.relDepth = val
+			default:
+				panic(fmt.Errorf("<QuerySeter.RelatedSel> wrong param kind: %v", val))
+			}
+		}
+	}
+	return &o
+}
+
+// create new QuerySeter.
+func newQuerySet(orm *orm, mi *modelInfo) QuerySeter {
+	o := new(querySet)
+	o.mi = mi
 	o.orm = orm
 	return o
 }

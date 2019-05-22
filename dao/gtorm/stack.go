@@ -94,7 +94,6 @@ func getStackOrm(db string) Ormer {
 	return nil
 }
 
-//GetOrm 获取go程id
 func goId() string {
 	// var buf [64]byte
 	// n := runtime.Stack(buf[:], false)

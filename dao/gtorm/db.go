@@ -1,17 +1,3 @@
-// Copyright 2014 beego Author. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package gtorm
 
 import (
@@ -20,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -32,36 +19,6 @@ const (
 var (
 	// ErrMissPK missing pk error
 	ErrMissPK = errors.New("missed pk value")
-)
-
-var (
-	operators = map[string]bool{
-		"exact":     true,
-		"iexact":    true,
-		"contains":  true,
-		"icontains": true,
-		// "regex":       true,
-		// "iregex":      true,
-		"gt":          true,
-		"gte":         true,
-		"lt":          true,
-		"lte":         true,
-		"eq":          true,
-		"nq":          true,
-		"ne":          true,
-		"startswith":  true,
-		"endswith":    true,
-		"istartswith": true,
-		"iendswith":   true,
-		"in":          true,
-		"between":     true,
-		// "year":        true,
-		// "month":       true,
-		// "day":         true,
-		// "week_day":    true,
-		"isnull": true,
-		// "search":      true,
-	}
 )
 
 // an instance of dbBaser interface/
@@ -637,480 +594,6 @@ func (d *dbBase) Update(q dbQuerier, mi *modelInfo, ind reflect.Value, tz *time.
 	return 0, err
 }
 
-// execute delete sql dbQuerier with given struct reflect.Value.
-// delete index is pk.
-func (d *dbBase) Delete(q dbQuerier, mi *modelInfo, ind reflect.Value, tz *time.Location, cols []string) (int64, error) {
-	var whereCols []string
-	var args []interface{}
-	// if specify cols length > 0, then use it for where condition.
-	if len(cols) > 0 {
-		var err error
-		whereCols = make([]string, 0, len(cols))
-		args, _, err = d.collectValues(mi, ind, cols, false, false, &whereCols, tz)
-		if err != nil {
-			return 0, err
-		}
-	} else {
-		// default use pk value as where condtion.
-		pkColumn, pkValue, ok := getExistPk(mi, ind)
-		if !ok {
-			return 0, ErrMissPK
-		}
-		whereCols = []string{pkColumn}
-		args = append(args, pkValue)
-	}
-
-	Q := d.ins.TableQuote()
-
-	sep := fmt.Sprintf("%s = ? AND %s", Q, Q)
-	wheres := strings.Join(whereCols, sep)
-
-	query := fmt.Sprintf("DELETE FROM %s%s%s WHERE %s%s%s = ?", Q, mi.table, Q, Q, wheres, Q)
-
-	d.ins.ReplaceMarks(&query)
-	res, err := q.Exec(query, args...)
-	if err == nil {
-		num, err := res.RowsAffected()
-		if err != nil {
-			return 0, err
-		}
-		if num > 0 {
-			if mi.fields.pk.auto {
-				if mi.fields.pk.fieldType&IsPositiveIntegerField > 0 {
-					ind.FieldByIndex(mi.fields.pk.fieldIndex).SetUint(0)
-				} else {
-					ind.FieldByIndex(mi.fields.pk.fieldIndex).SetInt(0)
-				}
-			}
-			err := d.deleteRels(q, mi, args, tz)
-			if err != nil {
-				return num, err
-			}
-		}
-		return num, err
-	}
-	return 0, err
-}
-
-// update table-related record by querySet.
-// need querySet not struct reflect.Value to update related records.
-func (d *dbBase) UpdateBatch(q dbQuerier, qs *querySet, mi *modelInfo, cond *Condition, params Params, tz *time.Location) (int64, error) {
-	columns := make([]string, 0, len(params))
-	values := make([]interface{}, 0, len(params))
-	for col, val := range params {
-		if fi, ok := mi.fields.GetByAny(col); !ok || !fi.dbcol {
-			panic(fmt.Errorf("wrong field/column name `%s`", col))
-		} else {
-			columns = append(columns, fi.column)
-			values = append(values, val)
-		}
-	}
-
-	if len(columns) == 0 {
-		panic(fmt.Errorf("update params cannot empty"))
-	}
-
-	tables := newDbTables(mi, d.ins)
-	if qs != nil {
-		tables.parseRelated(qs.related, qs.relDepth)
-	}
-
-	where, args := tables.getCondSQL(cond, false, tz)
-
-	values = append(values, args...)
-
-	join := tables.getJoinSQL()
-
-	var query, T string
-
-	Q := d.ins.TableQuote()
-
-	if d.ins.SupportUpdateJoin() {
-		T = "T0."
-	}
-
-	cols := make([]string, 0, len(columns))
-
-	for i, v := range columns {
-		col := fmt.Sprintf("%s%s%s%s", T, Q, v, Q)
-		if c, ok := values[i].(colValue); ok {
-			switch c.opt {
-			case ColAdd:
-				cols = append(cols, col+" = "+col+" + ?")
-			case ColMinus:
-				cols = append(cols, col+" = "+col+" - ?")
-			case ColMultiply:
-				cols = append(cols, col+" = "+col+" * ?")
-			case ColExcept:
-				cols = append(cols, col+" = "+col+" / ?")
-			}
-			values[i] = c.value
-		} else {
-			cols = append(cols, col+" = ?")
-		}
-	}
-
-	sets := strings.Join(cols, ", ") + " "
-
-	if d.ins.SupportUpdateJoin() {
-		query = fmt.Sprintf("UPDATE %s%s%s T0 %sSET %s%s", Q, mi.table, Q, join, sets, where)
-	} else {
-		supQuery := fmt.Sprintf("SELECT T0.%s%s%s FROM %s%s%s T0 %s%s", Q, mi.fields.pk.column, Q, Q, mi.table, Q, join, where)
-		query = fmt.Sprintf("UPDATE %s%s%s SET %sWHERE %s%s%s IN ( %s )", Q, mi.table, Q, sets, Q, mi.fields.pk.column, Q, supQuery)
-	}
-
-	d.ins.ReplaceMarks(&query)
-	res, err := q.Exec(query, values...)
-	if err == nil {
-		return res.RowsAffected()
-	}
-	return 0, err
-}
-
-// delete related records.
-// do UpdateBanch or DeleteBanch by condition of tables' relationship.
-func (d *dbBase) deleteRels(q dbQuerier, mi *modelInfo, args []interface{}, tz *time.Location) error {
-	for _, fi := range mi.fields.fieldsReverse {
-		fi = fi.reverseFieldInfo
-		switch fi.onDelete {
-		case odCascade:
-			cond := NewCondition().And(fmt.Sprintf("%s__in", fi.name), args...)
-			_, err := d.DeleteBatch(q, nil, fi.mi, cond, tz)
-			if err != nil {
-				return err
-			}
-		case odSetDefault, odSetNULL:
-			cond := NewCondition().And(fmt.Sprintf("%s__in", fi.name), args...)
-			params := Params{fi.column: nil}
-			if fi.onDelete == odSetDefault {
-				params[fi.column] = fi.initial.String()
-			}
-			_, err := d.UpdateBatch(q, nil, fi.mi, cond, params, tz)
-			if err != nil {
-				return err
-			}
-		case odDoNothing:
-		}
-	}
-	return nil
-}
-
-// delete table-related records.
-func (d *dbBase) DeleteBatch(q dbQuerier, qs *querySet, mi *modelInfo, cond *Condition, tz *time.Location) (int64, error) {
-	tables := newDbTables(mi, d.ins)
-	tables.skipEnd = true
-
-	if qs != nil {
-		tables.parseRelated(qs.related, qs.relDepth)
-	}
-
-	if cond == nil || cond.IsEmpty() {
-		panic(fmt.Errorf("delete operation cannot execute without condition"))
-	}
-
-	Q := d.ins.TableQuote()
-
-	where, args := tables.getCondSQL(cond, false, tz)
-	join := tables.getJoinSQL()
-
-	cols := fmt.Sprintf("T0.%s%s%s", Q, mi.fields.pk.column, Q)
-	query := fmt.Sprintf("SELECT %s FROM %s%s%s T0 %s%s", cols, Q, mi.table, Q, join, where)
-
-	d.ins.ReplaceMarks(&query)
-
-	var rs *sql.Rows
-	r, err := q.Query(query, args...)
-	if err != nil {
-		return 0, err
-	}
-	rs = r
-	defer rs.Close()
-
-	var ref interface{}
-	args = make([]interface{}, 0)
-	cnt := 0
-	for rs.Next() {
-		if err := rs.Scan(&ref); err != nil {
-			return 0, err
-		}
-		pkValue, err := d.convertValueFromDB(mi.fields.pk, reflect.ValueOf(ref).Interface(), tz)
-		if err != nil {
-			return 0, err
-		}
-		args = append(args, pkValue)
-		cnt++
-	}
-
-	if cnt == 0 {
-		return 0, nil
-	}
-
-	marks := make([]string, len(args))
-	for i := range marks {
-		marks[i] = "?"
-	}
-	sql := fmt.Sprintf("IN (%s)", strings.Join(marks, ", "))
-	query = fmt.Sprintf("DELETE FROM %s%s%s WHERE %s%s%s %s", Q, mi.table, Q, Q, mi.fields.pk.column, Q, sql)
-
-	d.ins.ReplaceMarks(&query)
-	res, err := q.Exec(query, args...)
-	if err == nil {
-		num, err := res.RowsAffected()
-		if err != nil {
-			return 0, err
-		}
-		if num > 0 {
-			err := d.deleteRels(q, mi, args, tz)
-			if err != nil {
-				return num, err
-			}
-		}
-		return num, nil
-	}
-	return 0, err
-}
-
-// read related records.
-func (d *dbBase) ReadBatch(q dbQuerier, qs *querySet, mi *modelInfo, cond *Condition, container interface{}, tz *time.Location, cols []string) (int64, error) {
-
-	val := reflect.ValueOf(container)
-	ind := reflect.Indirect(val)
-
-	errTyp := true
-	one := true
-	isPtr := true
-
-	if val.Kind() == reflect.Ptr {
-		fn := ""
-		if ind.Kind() == reflect.Slice {
-			one = false
-			typ := ind.Type().Elem()
-			switch typ.Kind() {
-			case reflect.Ptr:
-				fn = getFullName(typ.Elem())
-			case reflect.Struct:
-				isPtr = false
-				fn = getFullName(typ)
-			}
-		} else {
-			fn = getFullName(ind.Type())
-		}
-		errTyp = fn != mi.fullName
-	}
-
-	if errTyp {
-		if one {
-			panic(fmt.Errorf("wrong object type `%s` for rows scan, need *%s", val.Type(), mi.fullName))
-		} else {
-			panic(fmt.Errorf("wrong object type `%s` for rows scan, need *[]*%s or *[]%s", val.Type(), mi.fullName, mi.fullName))
-		}
-	}
-
-	rlimit := qs.limit
-	offset := qs.offset
-
-	Q := d.ins.TableQuote()
-
-	var tCols []string
-	if len(cols) > 0 {
-		hasRel := len(qs.related) > 0 || qs.relDepth > 0
-		tCols = make([]string, 0, len(cols))
-		var maps map[string]bool
-		if hasRel {
-			maps = make(map[string]bool)
-		}
-		for _, col := range cols {
-			if fi, ok := mi.fields.GetByAny(col); ok {
-				tCols = append(tCols, fi.column)
-				if hasRel {
-					maps[fi.column] = true
-				}
-			} else {
-				panic(fmt.Errorf("wrong field/column name `%s`", col))
-			}
-		}
-		if hasRel {
-			for _, fi := range mi.fields.fieldsDB {
-				if fi.fieldType&IsRelField > 0 {
-					if !maps[fi.column] {
-						tCols = append(tCols, fi.column)
-					}
-				}
-			}
-		}
-	} else {
-		tCols = mi.fields.dbcols
-	}
-
-	colsNum := len(tCols)
-	sep := fmt.Sprintf("%s, T0.%s", Q, Q)
-	sels := fmt.Sprintf("T0.%s%s%s", Q, strings.Join(tCols, sep), Q)
-
-	tables := newDbTables(mi, d.ins)
-	tables.parseRelated(qs.related, qs.relDepth)
-
-	where, args := tables.getCondSQL(cond, false, tz)
-	groupBy := tables.getGroupSQL(qs.groups)
-	orderBy := tables.getOrderSQL(qs.orders)
-	limit := tables.getLimitSQL(mi, offset, rlimit)
-	join := tables.getJoinSQL()
-
-	for _, tbl := range tables.tables {
-		if tbl.sel {
-			colsNum += len(tbl.mi.fields.dbcols)
-			sep := fmt.Sprintf("%s, %s.%s", Q, tbl.index, Q)
-			sels += fmt.Sprintf(", %s.%s%s%s", tbl.index, Q, strings.Join(tbl.mi.fields.dbcols, sep), Q)
-		}
-	}
-
-	sqlSelect := "SELECT"
-	if qs.distinct {
-		sqlSelect += " DISTINCT"
-	}
-	query := fmt.Sprintf("%s %s FROM %s%s%s T0 %s%s%s%s%s", sqlSelect, sels, Q, mi.table, Q, join, where, groupBy, orderBy, limit)
-
-	d.ins.ReplaceMarks(&query)
-
-	var rs *sql.Rows
-	r, err := q.Query(query, args...)
-	if err != nil {
-		return 0, err
-	}
-	rs = r
-
-	refs := make([]interface{}, colsNum)
-	for i := range refs {
-		var ref interface{}
-		refs[i] = &ref
-	}
-
-	defer rs.Close()
-
-	slice := ind
-
-	var cnt int64
-	for rs.Next() {
-		if one && cnt == 0 || !one {
-			if err := rs.Scan(refs...); err != nil {
-				return 0, err
-			}
-
-			elm := reflect.New(mi.addrField.Elem().Type())
-			mind := reflect.Indirect(elm)
-
-			cacheV := make(map[string]*reflect.Value)
-			cacheM := make(map[string]*modelInfo)
-			trefs := refs
-
-			d.setColsValues(mi, &mind, tCols, refs[:len(tCols)], tz)
-			trefs = refs[len(tCols):]
-
-			for _, tbl := range tables.tables {
-				// loop selected tables
-				if tbl.sel {
-					last := mind
-					names := ""
-					mmi := mi
-					// loop cascade models
-					for _, name := range tbl.names {
-						names += name
-						if val, ok := cacheV[names]; ok {
-							last = *val
-							mmi = cacheM[names]
-						} else {
-							fi := mmi.fields.GetByName(name)
-							lastm := mmi
-							mmi = fi.relModelInfo
-							field := last
-							if last.Kind() != reflect.Invalid {
-								field = reflect.Indirect(last.FieldByIndex(fi.fieldIndex))
-								if field.IsValid() {
-									d.setColsValues(mmi, &field, mmi.fields.dbcols, trefs[:len(mmi.fields.dbcols)], tz)
-									for _, fi := range mmi.fields.fieldsReverse {
-										if fi.inModel && fi.reverseFieldInfo.mi == lastm {
-											if fi.reverseFieldInfo != nil {
-												f := field.FieldByIndex(fi.fieldIndex)
-												if f.Kind() == reflect.Ptr {
-													f.Set(last.Addr())
-												}
-											}
-										}
-									}
-									last = field
-								}
-							}
-							cacheV[names] = &field
-							cacheM[names] = mmi
-						}
-					}
-					trefs = trefs[len(mmi.fields.dbcols):]
-				}
-			}
-
-			if one {
-				ind.Set(mind)
-			} else {
-				if cnt == 0 {
-					// you can use a empty & caped container list
-					// orm will not replace it
-					if ind.Len() != 0 {
-						// if container is not empty
-						// create a new one
-						slice = reflect.New(ind.Type()).Elem()
-					}
-				}
-
-				if isPtr {
-					slice = reflect.Append(slice, mind.Addr())
-				} else {
-					slice = reflect.Append(slice, mind)
-				}
-			}
-		}
-		cnt++
-	}
-
-	if !one {
-		if cnt > 0 {
-			ind.Set(slice)
-		} else {
-			// when a result is empty and container is nil
-			// to set a empty container
-			if ind.IsNil() {
-				ind.Set(reflect.MakeSlice(ind.Type(), 0, 0))
-			}
-		}
-	}
-
-	return cnt, nil
-}
-
-// excute count sql and return count result int64.
-func (d *dbBase) Count(q dbQuerier, qs *querySet, mi *modelInfo, cond *Condition, tz *time.Location) (cnt int64, err error) {
-	tables := newDbTables(mi, d.ins)
-	tables.parseRelated(qs.related, qs.relDepth)
-
-	where, args := tables.getCondSQL(cond, false, tz)
-	groupBy := tables.getGroupSQL(qs.groups)
-	tables.getOrderSQL(qs.orders)
-	join := tables.getJoinSQL()
-
-	Q := d.ins.TableQuote()
-
-	query := fmt.Sprintf("SELECT COUNT(*) FROM %s%s%s T0 %s%s%s", Q, mi.table, Q, join, where, groupBy)
-
-	if groupBy != "" {
-		query = fmt.Sprintf("SELECT COUNT(*) FROM (%s) AS T", query)
-	}
-
-	d.ins.ReplaceMarks(&query)
-
-	row := q.QueryRow(query, args...)
-
-	err = row.Scan(&cnt)
-	return
-}
-
 // generate sql with replacing operator string placeholders and replaced values.
 func (d *dbBase) GenerateOperatorSQL(mi *modelInfo, fi *fieldInfo, operator string, args []interface{}, tz *time.Location) (string, []interface{}) {
 	var sql string
@@ -1549,178 +1032,6 @@ setValue:
 }
 
 // query sql, read values , save to *[]ParamList.
-func (d *dbBase) ReadValues(q dbQuerier, qs *querySet, mi *modelInfo, cond *Condition, exprs []string, container interface{}, tz *time.Location) (int64, error) {
-
-	var (
-		maps  []Params
-		lists []ParamsList
-		list  ParamsList
-	)
-
-	typ := 0
-	switch v := container.(type) {
-	case *[]Params:
-		d := *v
-		if len(d) == 0 {
-			maps = d
-		}
-		typ = 1
-	case *[]ParamsList:
-		d := *v
-		if len(d) == 0 {
-			lists = d
-		}
-		typ = 2
-	case *ParamsList:
-		d := *v
-		if len(d) == 0 {
-			list = d
-		}
-		typ = 3
-	default:
-		panic(fmt.Errorf("unsupport read values type `%T`", container))
-	}
-
-	tables := newDbTables(mi, d.ins)
-
-	var (
-		cols  []string
-		infos []*fieldInfo
-	)
-
-	hasExprs := len(exprs) > 0
-
-	Q := d.ins.TableQuote()
-
-	if hasExprs {
-		cols = make([]string, 0, len(exprs))
-		infos = make([]*fieldInfo, 0, len(exprs))
-		for _, ex := range exprs {
-			index, name, fi, suc := tables.parseExprs(mi, strings.Split(ex, ExprSep))
-			if !suc {
-				panic(fmt.Errorf("unknown field/column name `%s`", ex))
-			}
-			cols = append(cols, fmt.Sprintf("%s.%s%s%s %s%s%s", index, Q, fi.column, Q, Q, name, Q))
-			infos = append(infos, fi)
-		}
-	} else {
-		cols = make([]string, 0, len(mi.fields.dbcols))
-		infos = make([]*fieldInfo, 0, len(exprs))
-		for _, fi := range mi.fields.fieldsDB {
-			cols = append(cols, fmt.Sprintf("T0.%s%s%s %s%s%s", Q, fi.column, Q, Q, fi.name, Q))
-			infos = append(infos, fi)
-		}
-	}
-
-	where, args := tables.getCondSQL(cond, false, tz)
-	groupBy := tables.getGroupSQL(qs.groups)
-	orderBy := tables.getOrderSQL(qs.orders)
-	limit := tables.getLimitSQL(mi, qs.offset, qs.limit)
-	join := tables.getJoinSQL()
-
-	sels := strings.Join(cols, ", ")
-
-	sqlSelect := "SELECT"
-	if qs.distinct {
-		sqlSelect += " DISTINCT"
-	}
-	query := fmt.Sprintf("%s %s FROM %s%s%s T0 %s%s%s%s%s", sqlSelect, sels, Q, mi.table, Q, join, where, groupBy, orderBy, limit)
-
-	d.ins.ReplaceMarks(&query)
-
-	rs, err := q.Query(query, args...)
-	if err != nil {
-		return 0, err
-	}
-	refs := make([]interface{}, len(cols))
-	for i := range refs {
-		var ref interface{}
-		refs[i] = &ref
-	}
-
-	defer rs.Close()
-
-	var (
-		cnt     int64
-		columns []string
-	)
-	for rs.Next() {
-		if cnt == 0 {
-			cols, err := rs.Columns()
-			if err != nil {
-				return 0, err
-			}
-			columns = cols
-		}
-
-		if err := rs.Scan(refs...); err != nil {
-			return 0, err
-		}
-
-		switch typ {
-		case 1:
-			params := make(Params, len(cols))
-			for i, ref := range refs {
-				fi := infos[i]
-
-				val := reflect.Indirect(reflect.ValueOf(ref)).Interface()
-
-				value, err := d.convertValueFromDB(fi, val, tz)
-				if err != nil {
-					panic(fmt.Errorf("db value convert failed `%v` %s", val, err.Error()))
-				}
-
-				params[columns[i]] = value
-			}
-			maps = append(maps, params)
-		case 2:
-			params := make(ParamsList, 0, len(cols))
-			for i, ref := range refs {
-				fi := infos[i]
-
-				val := reflect.Indirect(reflect.ValueOf(ref)).Interface()
-
-				value, err := d.convertValueFromDB(fi, val, tz)
-				if err != nil {
-					panic(fmt.Errorf("db value convert failed `%v` %s", val, err.Error()))
-				}
-
-				params = append(params, value)
-			}
-			lists = append(lists, params)
-		case 3:
-			for i, ref := range refs {
-				fi := infos[i]
-
-				val := reflect.Indirect(reflect.ValueOf(ref)).Interface()
-
-				value, err := d.convertValueFromDB(fi, val, tz)
-				if err != nil {
-					panic(fmt.Errorf("db value convert failed `%v` %s", val, err.Error()))
-				}
-
-				list = append(list, value)
-			}
-		}
-
-		cnt++
-	}
-
-	switch v := container.(type) {
-	case *[]Params:
-		*v = maps
-	case *[]ParamsList:
-		*v = lists
-	case *ParamsList:
-		*v = list
-	}
-
-	return cnt, nil
-}
-
-func (d *dbBase) RowsTo(dbQuerier, *querySet, *modelInfo, *Condition, interface{}, string, string, *time.Location) (int64, error) {
-	return 0, nil
-}
 
 // flag of update joined record.
 func (d *dbBase) SupportUpdateJoin() bool {
@@ -1836,4 +1147,501 @@ func (d *dbBase) ShowColumnsQuery(table string) string {
 // not implement.
 func (d *dbBase) IndexExists(dbQuerier, string, string) bool {
 	panic(ErrNotImplement)
+}
+
+// get table alias.
+func getDbAlias(name string) *alias {
+	if al, ok := dataBaseCache.get(name); ok {
+		return al
+	}
+	panic(fmt.Errorf("unknown DataBase alias name %s", name))
+}
+
+// get pk column info.
+func getExistPk(mi *modelInfo, ind reflect.Value) (column string, value interface{}, exist bool) {
+	fi := mi.fields.pk
+
+	v := ind.FieldByIndex(fi.fieldIndex)
+	if fi.fieldType&IsPositiveIntegerField > 0 {
+		vu := v.Uint()
+		exist = vu > 0
+		value = vu
+	} else if fi.fieldType&IsIntegerField > 0 {
+		vu := v.Int()
+		exist = true
+		value = vu
+	} else if fi.fieldType&IsRelField > 0 {
+		_, value, exist = getExistPk(fi.relModelInfo, reflect.Indirect(v))
+	} else {
+		vu := v.String()
+		exist = vu != ""
+		value = vu
+	}
+
+	column = fi.column
+	return
+}
+
+// get fields description as flatted string.
+func getFlatParams(fi *fieldInfo, args []interface{}, tz *time.Location) (params []interface{}) {
+
+outFor:
+	for _, arg := range args {
+		val := reflect.ValueOf(arg)
+
+		if arg == nil {
+			params = append(params, arg)
+			continue
+		}
+
+		kind := val.Kind()
+		if kind == reflect.Ptr {
+			val = val.Elem()
+			kind = val.Kind()
+			arg = val.Interface()
+		}
+
+		switch kind {
+		case reflect.String:
+			v := val.String()
+			if fi != nil {
+				if fi.fieldType == TypeTimeField || fi.fieldType == TypeDateField || fi.fieldType == TypeDateTimeField {
+					var t time.Time
+					var err error
+					if len(v) >= 19 {
+						s := v[:19]
+						t, err = time.ParseInLocation(formatDateTime, s, DefaultTimeLoc)
+					} else if len(v) >= 10 {
+						s := v
+						if len(v) > 10 {
+							s = v[:10]
+						}
+						t, err = time.ParseInLocation(formatDate, s, tz)
+					} else {
+						s := v
+						if len(s) > 8 {
+							s = v[:8]
+						}
+						t, err = time.ParseInLocation(formatTime, s, tz)
+					}
+					if err == nil {
+						if fi.fieldType == TypeDateField {
+							v = t.In(tz).Format(formatDate)
+						} else if fi.fieldType == TypeDateTimeField {
+							v = t.In(tz).Format(formatDateTime)
+						} else {
+							v = t.In(tz).Format(formatTime)
+						}
+					}
+				}
+			}
+			arg = v
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			arg = val.Int()
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			arg = val.Uint()
+		case reflect.Float32:
+			arg, _ = StrTo(ToStr(arg)).Float64()
+		case reflect.Float64:
+			arg = val.Float()
+		case reflect.Bool:
+			arg = val.Bool()
+		case reflect.Slice, reflect.Array:
+			if _, ok := arg.([]byte); ok {
+				continue outFor
+			}
+
+			var args []interface{}
+			for i := 0; i < val.Len(); i++ {
+				v := val.Index(i)
+
+				var vu interface{}
+				if v.CanInterface() {
+					vu = v.Interface()
+				}
+
+				if vu == nil {
+					continue
+				}
+
+				args = append(args, vu)
+			}
+
+			if len(args) > 0 {
+				p := getFlatParams(fi, args, tz)
+				params = append(params, p...)
+			}
+			continue outFor
+		case reflect.Struct:
+			if v, ok := arg.(time.Time); ok {
+				if fi != nil && fi.fieldType == TypeDateField {
+					arg = v.In(tz).Format(formatDate)
+				} else if fi != nil && fi.fieldType == TypeDateTimeField {
+					arg = v.In(tz).Format(formatDateTime)
+				} else if fi != nil && fi.fieldType == TypeTimeField {
+					arg = v.In(tz).Format(formatTime)
+				} else {
+					arg = v.In(tz).Format(formatDateTime)
+				}
+			} else {
+				typ := val.Type()
+				name := getFullName(typ)
+				var value interface{}
+				if mmi, ok := modelCache.getByFullName(name); ok {
+					if _, vu, exist := getExistPk(mmi, val); exist {
+						value = vu
+					}
+				}
+				arg = value
+
+				if arg == nil {
+					panic(fmt.Errorf("need a valid args value, unknown table or value `%s`", name))
+				}
+			}
+		}
+
+		params = append(params, arg)
+	}
+	return
+}
+
+// DriverType database driver constant int.
+type DriverType int
+
+// Enum the Database driver
+const (
+	_          DriverType = iota // int enum type
+	DRMySQL                      // mysql
+	DRSqlite                     // sqlite
+	DROracle                     // oracle
+	DRPostgres                   // pgsql
+)
+
+// database driver string.
+type driver string
+
+// get type constant int of current driver..
+func (d driver) Type() DriverType {
+	a, _ := dataBaseCache.get(string(d))
+	return a.Driver
+}
+
+// get name of current driver
+func (d driver) Name() string {
+	return string(d)
+}
+
+// check driver iis implemented Driver interface or not.
+var _ Driver = new(driver)
+
+var (
+	dataBaseCache = &_dbCache{cache: make(map[string]*alias)}
+	drivers       = map[string]DriverType{
+		"mysql":    DRMySQL,
+		"postgres": DRPostgres,
+		"sqlite3":  DRSqlite,
+		"oracle":   DROracle,
+		"oci8":     DROracle, // github.com/mattn/go-oci8
+		"ora":      DROracle, //https://github.com/rana/ora
+	}
+	dbBasers = map[DriverType]dbBaser{
+		DRMySQL:    newdbBaseMysql(),
+		DRSqlite:   newdbBaseSqlite(),
+		DROracle:   newdbBaseOracle(),
+		DRPostgres: newdbBasePostgres(),
+	}
+)
+
+// database alias cacher.
+type _dbCache struct {
+	mux   sync.RWMutex
+	cache map[string]*alias
+}
+
+// add database alias with original name.
+func (ac *_dbCache) add(name string, al *alias) (added bool) {
+	ac.mux.Lock()
+	defer ac.mux.Unlock()
+	if _, ok := ac.cache[name]; !ok {
+		ac.cache[name] = al
+		added = true
+	}
+	return
+}
+
+// get database alias if cached.
+func (ac *_dbCache) get(name string) (al *alias, ok bool) {
+	ac.mux.RLock()
+	defer ac.mux.RUnlock()
+	al, ok = ac.cache[name]
+	return
+}
+
+// get default alias.
+func (ac *_dbCache) getDefault() (al *alias) {
+	al, _ = ac.get("default")
+	return
+}
+
+type alias struct {
+	Name         string
+	Driver       DriverType
+	DriverName   string
+	DataSource   string
+	MaxIdleConns int
+	MaxOpenConns int
+	DB           *sql.DB
+	DbBaser      dbBaser
+	TZ           *time.Location
+	Engine       string
+}
+
+func detectTZ(al *alias) {
+	// orm timezone system match database
+	// default use Local
+	al.TZ = time.Local
+
+	if al.DriverName == "sphinx" {
+		return
+	}
+
+	switch al.Driver {
+	case DRMySQL:
+		row := al.DB.QueryRow("SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP)")
+		var tz string
+		row.Scan(&tz)
+		if len(tz) >= 8 {
+			if tz[0] != '-' {
+				tz = "+" + tz
+			}
+			t, err := time.Parse("-07:00:00", tz)
+			if err == nil {
+				al.TZ = t.Location()
+			} else {
+
+			}
+		}
+
+		// get default engine from current database
+		row = al.DB.QueryRow("SELECT ENGINE, TRANSACTIONS FROM information_schema.engines WHERE SUPPORT = 'DEFAULT'")
+		var engine string
+		var tx bool
+		row.Scan(&engine, &tx)
+
+		if engine != "" {
+			al.Engine = engine
+		} else {
+			al.Engine = "INNODB"
+		}
+
+	case DRSqlite, DROracle:
+		al.TZ = time.UTC
+
+	case DRPostgres:
+		row := al.DB.QueryRow("SELECT current_setting('TIMEZONE')")
+		var tz string
+		row.Scan(&tz)
+		loc, err := time.LoadLocation(tz)
+		if err == nil {
+			al.TZ = loc
+		} else {
+
+		}
+	}
+}
+
+func addAliasWthDB(aliasName, driverName string, db *sql.DB) (*alias, error) {
+	al := new(alias)
+	al.Name = aliasName
+	al.DriverName = driverName
+	al.DB = db
+
+	if dr, ok := drivers[driverName]; ok {
+		al.DbBaser = dbBasers[dr]
+		al.Driver = dr
+	} else {
+		return nil, fmt.Errorf("driver name `%s` have not registered", driverName)
+	}
+
+	err := db.Ping()
+	if err != nil {
+		return nil, fmt.Errorf("register db Ping `%s`, %s", aliasName, err.Error())
+	}
+
+	if !dataBaseCache.add(aliasName, al) {
+		return nil, fmt.Errorf("DataBase alias name `%s` already registered, cannot reuse", aliasName)
+	}
+
+	return al, nil
+}
+
+// AddAliasWthDB add a aliasName for the drivename
+func AddAliasWthDB(aliasName, driverName string, db *sql.DB) error {
+	_, err := addAliasWthDB(aliasName, driverName, db)
+	return err
+}
+
+// RegisterDataBase Setting the database connect params. Use the database driver self dataSource args.
+func RegisterDataBase(aliasName, driverName, dataSource string, params ...int) error {
+	var (
+		err error
+		db  *sql.DB
+		al  *alias
+	)
+
+	db, err = sql.Open(driverName, dataSource)
+	if err != nil {
+		err = fmt.Errorf("register db `%s`, %s", aliasName, err.Error())
+		goto end
+	}
+
+	al, err = addAliasWthDB(aliasName, driverName, db)
+	if err != nil {
+		goto end
+	}
+
+	al.DataSource = dataSource
+
+	detectTZ(al)
+
+	for i, v := range params {
+		switch i {
+		case 0:
+			SetMaxIdleConns(al.Name, v)
+		case 1:
+			SetMaxOpenConns(al.Name, v)
+		}
+	}
+
+end:
+	if err != nil {
+		if db != nil {
+			db.Close()
+		}
+
+	}
+
+	return err
+}
+
+// RegisterDriver Register a database driver use specify driver name, this can be definition the driver is which database type.
+func RegisterDriver(driverName string, typ DriverType) error {
+	if t, ok := drivers[driverName]; !ok {
+		drivers[driverName] = typ
+	} else {
+		if t != typ {
+			return fmt.Errorf("driverName `%s` db driver already registered and is other type", driverName)
+		}
+	}
+	return nil
+}
+
+// SetDataBaseTZ Change the database default used timezone
+func SetDataBaseTZ(aliasName string, tz *time.Location) error {
+	if al, ok := dataBaseCache.get(aliasName); ok {
+		al.TZ = tz
+	} else {
+		return fmt.Errorf("DataBase alias name `%s` not registered", aliasName)
+	}
+	return nil
+}
+
+// SetMaxIdleConns Change the max idle conns for *sql.DB, use specify database alias name
+func SetMaxIdleConns(aliasName string, maxIdleConns int) {
+	al := getDbAlias(aliasName)
+	al.MaxIdleConns = maxIdleConns
+	al.DB.SetMaxIdleConns(maxIdleConns)
+}
+
+// SetMaxOpenConns Change the max open conns for *sql.DB, use specify database alias name
+func SetMaxOpenConns(aliasName string, maxOpenConns int) {
+	al := getDbAlias(aliasName)
+	al.MaxOpenConns = maxOpenConns
+	// for tip go 1.2
+	if fun := reflect.ValueOf(al.DB).MethodByName("SetMaxOpenConns"); fun.IsValid() {
+		fun.Call([]reflect.Value{reflect.ValueOf(maxOpenConns)})
+	}
+}
+
+// GetDB Get *sql.DB from registered database by db alias name.
+// Use "default" as alias name if you not set.
+func GetDB(aliasNames ...string) (*sql.DB, error) {
+	var name string
+	if len(aliasNames) > 0 {
+		name = aliasNames[0]
+	} else {
+		name = "default"
+	}
+	al, ok := dataBaseCache.get(name)
+	if ok {
+		return al.DB, nil
+	}
+	return nil, fmt.Errorf("DataBase of alias name `%s` not found", name)
+}
+
+// mysql operators.
+var mysqlOperators = map[string]string{}
+
+// mysql dbBaser implementation.
+type dbBaseMysql struct {
+	dbBase
+}
+
+var _ dbBaser = new(dbBaseMysql)
+
+// get mysql operator.
+func (d *dbBaseMysql) OperatorSQL(operator string) string {
+	return mysqlOperators[operator]
+}
+
+// create new mysql dbBaser.
+func newdbBaseMysql() dbBaser {
+	b := new(dbBaseMysql)
+	b.ins = b
+	return b
+}
+
+// oracle dbBaser
+type dbBaseOracle struct {
+	dbBase
+}
+
+var _ dbBaser = new(dbBaseOracle)
+
+// create oracle dbBaser.
+func newdbBaseOracle() dbBaser {
+	b := new(dbBaseOracle)
+	b.ins = b
+	return b
+}
+
+type dbBaseSqlite struct {
+	dbBase
+}
+
+var _ dbBaser = new(dbBaseSqlite)
+
+func (d *dbBaseSqlite) GenerateOperatorLeftCol(fi *fieldInfo, operator string, leftCol *string) {
+	if fi.fieldType == TypeDateField {
+		*leftCol = fmt.Sprintf("DATE(%s)", *leftCol)
+	}
+}
+
+func newdbBaseSqlite() dbBaser {
+	b := new(dbBaseSqlite)
+	b.ins = b
+	return b
+}
+
+type dbBasePostgres struct {
+	dbBase
+}
+
+var _ dbBaser = new(dbBasePostgres)
+
+// create new postgresql dbBaser.
+func newdbBasePostgres() dbBaser {
+	b := new(dbBasePostgres)
+	b.ins = b
+	return b
 }

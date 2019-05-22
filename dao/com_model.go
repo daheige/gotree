@@ -77,7 +77,7 @@ func (self *ComModel) Conn() Conn {
 		return nil
 	}
 	o := gtorm.New(self.comName)
-	if modelProfiler {
+	if modelProfiler && o.Driver().Type() == gtorm.DRMySQL {
 		o.RawCallBack(func(sql string, args []interface{}) {
 			self.profiler(sql, args...)
 		})
