@@ -30,7 +30,7 @@ import (
 type RpcClient struct {
 	lib.Object
 	limiteGo    *lib.LimiteGo
-	retry       int8
+	retry       int
 	sleepCount  int
 	connReuse   bool //连接池,连接复用 默认开启
 	innerMaster *InnerMaster
@@ -54,7 +54,7 @@ func (self *RpcClient) Gotree(concurrency int, timeout int) *RpcClient {
 	self.limiteGo = new(lib.LimiteGo).Gotree(concurrency)
 	maxConnCount += concurrency / 64
 
-	self.retry = 10 //网络超时重试重试次数
+	self.retry = timeout //网络超时重试重试次数
 	self.connReuse = true
 
 	self.sleepCount = timeout * 1000 //转毫秒
@@ -173,7 +173,7 @@ func (self *RpcClient) Call(obj interface{}, reply interface{}) (err error) {
 		return resultErr
 	}
 
-	for index := int8(1); index <= self.retry; index++ {
+	for index := 1; index <= self.retry; index++ {
 		err = self.limiteGo.Go(fun)
 		//如果无错误 或 不是网络造成的错误 return
 		if err == nil || err != ErrNetwork {

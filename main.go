@@ -112,6 +112,7 @@ func newProject() {
 		removeProject(project)
 		fmt.Println(err)
 	}
+	fmt.Println(fmt.Sprintf("\x1b[0;%dm%s\x1b[0m", 32, "Success in creating "+os.Args[len(os.Args)-1]+"."))
 }
 
 func generateGoRecursion(dir string, project string) error {
