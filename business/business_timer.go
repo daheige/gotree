@@ -69,15 +69,6 @@ func (self *BusinessTimer) stopTick(args ...interface{}) {
 	}
 }
 
-//服务定位器获取服务
-func (self *BusinessTimer) Service(child interface{}) {
-	err := _scl.Service(child)
-	if err != nil {
-		helper.Exit("BusinessTimer-Service Service not found error:" + err.Error())
-	}
-	return
-}
-
 //timer 启动观察者
 func (self *BusinessTimer) timer(args ...interface{}) {
 	selfName := self.ClassName(self.TopChild())
@@ -142,13 +133,6 @@ func (self *BusinessTimer) Async(run func(ac AsyncController), completeds ...fun
 	}
 	ac := new(async).Gotree(run, completed)
 	go ac.execute()
-}
-
-// Broadcast 调用所有注册service的method方法. 潜龙勿用,会使项目非常难以维护
-func (self *BusinessTimer) Broadcast(method string, arg interface{}) {
-	if e := _scl.Broadcast(method, arg); e != nil {
-		helper.Log().Error("BusinessTimer-Broadcast errror:" + e.Error())
-	}
 }
 
 type trigger struct {

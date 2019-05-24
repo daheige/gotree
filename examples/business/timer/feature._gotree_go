@@ -41,7 +41,7 @@ func (self *Feature) CourseTick() {
 		featureSer *service.Feature
 	)
 	helper.Log().Warning("CourseTick")
-	self.Service(&featureSer)
+	featureSer = new(service.Feature).Gotree()
 
 	self.Async(func(ac business.AsyncController) {
 		featureSer.Course()
@@ -54,7 +54,7 @@ func (self *Feature) CourseDay() {
 	var (
 		featureSer *service.Feature
 	)
-	self.Service(&featureSer)
+	featureSer = new(service.Feature).Gotree()
 	helper.Log().Notice("CourseDay")
 
 	//必看!!!!! Feature.Simple !!!

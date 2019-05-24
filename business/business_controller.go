@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/8treenet/gotree/helper"
 	"github.com/8treenet/gotree/lib/rpc"
 	"github.com/8treenet/gotree/remote_call"
 )
@@ -46,22 +45,6 @@ func (self *BusinessController) Gotree(child interface{}) *BusinessController {
 	self.AddChild(self, child)
 	rpc.GoDict().Set("gseq", getBseq())
 	return self
-}
-
-//服务定位器获取创建服务
-func (self *BusinessController) Service(child interface{}) {
-	err := _scl.MakeService(child)
-	if err != nil {
-		helper.Exit("BusinessController-Service Service not found error:" + err.Error())
-	}
-	return
-}
-
-// ServiceBroadcast 调用所有注册service的method方法. 潜龙勿用,会使项目非常难以维护
-func (self *BusinessController) ServiceBroadcast(method string, arg interface{}) {
-	if e := _scl.Broadcast(method, arg); e != nil {
-		helper.Log().Error("BusinessController-ServiceBroadcast error:" + e.Error())
-	}
 }
 
 //Async 异步执行

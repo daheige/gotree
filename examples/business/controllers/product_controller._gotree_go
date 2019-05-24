@@ -43,7 +43,7 @@ func (self *ProductController) Store(cmd business_cmd.Store, result *business_va
 	)
 	*result = business_value.Store{}
 
-	self.Service(&productSer)
+	productSer = new(service.Product).Gotree()
 	result.List, e = productSer.Store()
 
 	//self.RemoteAddr() 远程rpc ip地址
@@ -59,8 +59,8 @@ func (self *ProductController) Shopping(cmd business_cmd.Shopping, result *busin
 	)
 	*result = business_value.Shopping{}
 
-	self.Service(&productSer)
-	self.Service(&userSer)
+	productSer = new(service.Product).Gotree()
+	userSer = new(service.User).Gotree()
 	shortage, e := productSer.Shopping(cmd.UserId, cmd.ProductId, userSer)
 	if e != nil {
 		return

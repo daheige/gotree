@@ -9,10 +9,6 @@ import (
 	"github.com/8treenet/gotree/business"
 )
 
-func init() {
-	business.RegisterService(new(User).Gotree())
-}
-
 type User struct {
 	business.BusinessService
 }

@@ -179,10 +179,7 @@ $ go run $GOPATH/src/learning/business/unit/qps_press/main.go 10000
             productSer *service.Product
         )
         *result = business_value.Store{}
-
-        //通过 父类 Service 方法获取 service.Product 类型的服务对象。
-        //因为 go 没有泛型，实现服务定位器模式，只可依赖二级指针，不用管原理，直接取。
-        self.Service(&productSer)
+        productSer = new(service.Product).Gotree()
 
         //使用服务的 Store 方法 读取出商品数据， 并且赋值给出参 result 
         result.List, e = productSer.Store()
@@ -195,10 +192,6 @@ $ go run $GOPATH/src/learning/business/unit/qps_press/main.go 10000
     /* 
          learning/business/service/product.go
     */
-    func init() {
-        // RegisterService 注册 service 与控制器 self.Service(&) 关联
-        business.RegisterService(new(Product).Gotree())
-    }
 
     type Product struct {
         //继承 BusinessService 基类
@@ -493,8 +486,7 @@ $ go run main.go
             //learning/business/service/feature.go
             featureSer *service.Feature
         )
-        //服务定位器获取 Feature 服务，  
-        self.Service(&featureSer)
+        featureSer = new(service.Feature).Gotree()
 
         //异步调用Feature.Course方法
         self.Async(func(ac business.AsyncController) {

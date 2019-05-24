@@ -47,7 +47,7 @@ func (self *UserController) Register(cmd business_cmd.UserRegister, result *busi
 	//读取cmd头
 	helper.Log().Notice("UserController.test_head:", cmd.Header("test_head"))
 
-	self.Service(&userSer)
+	userSer = new(service.User).Gotree()
 	id, e := userSer.Register(cmd.UserName)
 	if e != nil {
 		return
@@ -64,7 +64,7 @@ func (self *UserController) Order(cmd business_cmd.UserOrder, result *business_v
 	)
 	*result = business_value.UserOrder{}
 
-	self.Service(&userSer)
+	userSer = new(service.User).Gotree()
 	result.List, e = userSer.Order(cmd.UserId)
 	return
 }

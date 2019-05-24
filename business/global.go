@@ -23,7 +23,6 @@ import (
 	"github.com/8treenet/gotree/remote_call"
 )
 
-var _scl *lib.ServiceLocator //业务服务定位器
 var _ssl *lib.ServiceLocator //系统服务定位器
 var _tsl *lib.ServiceLocator //定时业务
 var _timer []string
@@ -32,7 +31,6 @@ func init() {
 	helper.LoadConfig("business")
 	logOn()
 	appStart()
-	_scl = new(lib.ServiceLocator).Gotree()
 	_ssl = new(lib.ServiceLocator).Gotree()
 	_tsl = new(lib.ServiceLocator).Gotree()
 
@@ -54,11 +52,6 @@ func init() {
 //RpcServerRegister 注册rpc服务
 func RegisterController(controller interface{}) {
 	remote_call.RpcServerRegister(controller)
-}
-
-//RegisterService注册service
-func RegisterService(service interface{}) {
-	_scl.AddService(service)
 }
 
 //RegisterTimer注册定时器
@@ -88,11 +81,11 @@ func Run(args ...interface{}) {
 	var breaker *remote_call.RpcBreak
 	_ssl.GetComponent(&client)
 	_ssl.GetComponent(&breaker)
-	_scl.NotitySubscribe("startup")
+	_ssl.NotitySubscribe("startup")
 	breaker.RunTick()
 	client.Start()
 	rpcSer := remote_call.RpcServerRun(bindAddr)
-	_scl.NotitySubscribe("shutdown")
+	_ssl.NotitySubscribe("shutdown")
 	breaker.StopTick()
 	//优雅关闭
 	for index := 0; index < 30; index++ {
