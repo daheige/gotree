@@ -1315,6 +1315,7 @@ const (
 	DRSqlite                     // sqlite
 	DROracle                     // oracle
 	DRPostgres                   // pgsql
+	DRTiDB                       // TiDB
 )
 
 // database driver string.
@@ -1340,6 +1341,7 @@ var (
 		"mysql":    DRMySQL,
 		"postgres": DRPostgres,
 		"sqlite3":  DRSqlite,
+		"tidb":     DRTiDB,
 		"oracle":   DROracle,
 		"oci8":     DROracle, // github.com/mattn/go-oci8
 		"ora":      DROracle, //https://github.com/rana/ora
@@ -1349,6 +1351,7 @@ var (
 		DRSqlite:   newdbBaseSqlite(),
 		DROracle:   newdbBaseOracle(),
 		DRPostgres: newdbBasePostgres(),
+		DRTiDB:     newdbBaseTidb(),
 	}
 )
 
@@ -1642,6 +1645,17 @@ var _ dbBaser = new(dbBasePostgres)
 // create new postgresql dbBaser.
 func newdbBasePostgres() dbBaser {
 	b := new(dbBasePostgres)
+	b.ins = b
+	return b
+}
+
+type dbBaseTidb struct {
+	dbBase
+}
+
+// create new mysql dbBaser.
+func newdbBaseTidb() dbBaser {
+	b := new(dbBaseTidb)
 	b.ins = b
 	return b
 }

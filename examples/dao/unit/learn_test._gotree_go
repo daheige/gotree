@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"math/rand"
 	"testing"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 //go test -v -count=1 -run TestUserModel $GOPATH/src/learning/dao/unit/learn_test.go

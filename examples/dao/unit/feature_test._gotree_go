@@ -6,6 +6,8 @@ import (
 	"examples/dao/sources/memory"
 	"examples/dao/sources/models/product"
 	"testing"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 //go test -v -count=1 -run TestCache $GOPATH/src/learning/dao/unit/feature_test.go

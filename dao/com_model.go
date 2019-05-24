@@ -29,8 +29,6 @@ import (
 	"time"
 
 	"github.com/8treenet/gotree/lib/rpc"
-
-	_ "github.com/go-sql-driver/mysql"
 )
 
 type ComModel struct {
@@ -46,11 +44,6 @@ var (
 	modelProfilerCount = map[string]int{}
 	modelProfilerSync  sync.Mutex
 )
-
-func init() {
-	gtorm.RegisterDriver("mysql", gtorm.DRMySQL)
-	gtorm.RegisterDriver("mssql", gtorm.DRMySQL)
-}
 
 func (self *ComModel) Gotree(child interface{}) *ComModel {
 	self.Object.Gotree(self)
@@ -126,41 +119,44 @@ func (self *ComModel) ormOn() {
 	if !connectDao(self.comName + "model") {
 		return
 	}
-	//处理连接
-	driver := "mysql"
-	dbconfig := helper.Config().String("mysql::" + self.comName)
-	dbMaxIdleConns := helper.Config().String("mysql::" + self.comName + "MaxIdleConns")
-	dbMaxOpenConns := helper.Config().String("mysql::" + self.comName + "MaxOpenConns")
-	if dbconfig == "" {
-		driver = "mssql"
-		dbconfig = helper.Config().String("mssql::" + self.comName)
-		dbMaxIdleConns = helper.Config().String("mssql::" + self.comName + "MaxIdleConns")
-		dbMaxOpenConns = helper.Config().String("mssql::" + self.comName + "MaxOpenConns")
-	}
 
-	if dbconfig == "" {
+	drivers := []string{"mysql", "sqlite", "oracle", "postgres", "tidb"}
+	findSucess := false
+	for index := 0; index < len(drivers); index++ {
+		//处理连接
+		driver := drivers[index]
+		dbconfig := helper.Config().String(driver + "::" + self.comName)
+		dbMaxIdleConns := helper.Config().String(driver + "::" + self.comName + "MaxIdleConns")
+		dbMaxOpenConns := helper.Config().String(driver + "::" + self.comName + "MaxOpenConns")
+		if dbconfig == "" {
+			continue
+		}
+		findSucess = true
+		_, err := gtorm.GetDB(self.comName)
+		if err == nil {
+			//已注册
+			return
+		}
+
+		if dbMaxIdleConns == "" {
+			dbMaxIdleConns = helper.Config().DefaultString("sys::SqlMaxIdleConns", "1")
+		}
+		if dbMaxOpenConns == "" {
+			dbMaxOpenConns = helper.Config().DefaultString("sys::SqlMaxOpenConns", "2")
+		}
+		maxIdleConns, ei := strconv.Atoi(dbMaxIdleConns)
+		maxOpenConns, eo := strconv.Atoi(dbMaxOpenConns)
+		if ei != nil || eo != nil || maxIdleConns == 0 || maxOpenConns == 0 || maxIdleConns > maxOpenConns {
+			helper.Exit("ComModel Failure to connect " + self.comName + " db, MaxIdleConns or MaxOpenConns are invalid args")
+		}
+		helper.Log().Notice("ComModel Connect com " + self.comName + " database, MaxIdleConns:" + dbMaxIdleConns + ", MaxOpenConns:" + dbMaxOpenConns + ", config:" + dbconfig)
+		err = gtorm.RegisterDataBase(self.comName, driver, dbconfig, maxIdleConns, maxOpenConns)
+		if err != nil {
+			helper.Exit("ComModel-RegisterDataBase Connect " + self.comName + " error:," + err.Error())
+		}
+	}
+	if !findSucess {
 		helper.Exit("ComModel " + self.comName + ":No database configuration information exists")
-	}
-	_, err := gtorm.GetDB(self.comName)
-	if err == nil {
-		//已注册
-		return
-	}
-	if dbMaxIdleConns == "" {
-		dbMaxIdleConns = helper.Config().DefaultString("sys::SqlMaxIdleConns", "1")
-	}
-	if dbMaxOpenConns == "" {
-		dbMaxOpenConns = helper.Config().DefaultString("sys::SqlMaxOpenConns", "2")
-	}
-	maxIdleConns, ei := strconv.Atoi(dbMaxIdleConns)
-	maxOpenConns, eo := strconv.Atoi(dbMaxOpenConns)
-	if ei != nil || eo != nil || maxIdleConns == 0 || maxOpenConns == 0 || maxIdleConns > maxOpenConns {
-		helper.Exit("ComModel Failure to connect " + self.comName + " db, MaxIdleConns or MaxOpenConns are invalid args")
-	}
-	helper.Log().Notice("ComModel Connect com " + self.comName + " database, MaxIdleConns:" + dbMaxIdleConns + ", MaxOpenConns:" + dbMaxOpenConns + ", config:" + dbconfig)
-	err = gtorm.RegisterDataBase(self.comName, driver, dbconfig, maxIdleConns, maxOpenConns)
-	if err != nil {
-		helper.Exit("ComModel-RegisterDataBase Connect " + self.comName + " error:," + err.Error())
 	}
 }
 
