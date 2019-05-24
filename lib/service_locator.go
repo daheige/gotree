@@ -58,6 +58,19 @@ func (self *ServiceLocator) Service(obj interface{}) error {
 	return self.dict.Get(t.Elem().Elem().String(), obj)
 }
 
+//创建服务
+func (self *ServiceLocator) MakeService(obj interface{}) error {
+	t := reflect.TypeOf(obj)
+	value := self.dict.GetInterface(t.Elem().Elem().String())
+	if value == nil {
+		return errors.New("undefined")
+	}
+	newObj := reflect.New(reflect.TypeOf(value).Elem())
+	newObj.MethodByName("Gotree").Call([]reflect.Value{})
+	reflect.ValueOf(obj).Elem().Set(newObj)
+	return nil
+}
+
 //广播定位器内所有实现method的方法
 func (self *ServiceLocator) Broadcast(method string, arg interface{}) error {
 	list := self.dict.Keys()

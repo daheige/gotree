@@ -58,12 +58,6 @@ func RegisterController(controller interface{}) {
 
 //RegisterService注册service
 func RegisterService(service interface{}) {
-	type openService interface {
-		OpenService()
-	}
-
-	os := service.(openService)
-	os.OpenService()
 	_scl.AddService(service)
 }
 

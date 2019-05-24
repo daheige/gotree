@@ -23,8 +23,13 @@ func (self *Product) Gotree() *Product {
 	return self
 }
 
-//Shopping 购买商品
-func (self *Product) Shopping(userId, productId int64) (shortage bool, e error) {
+type userDeductMoney interface {
+	//实现了用户扣款接口的 service
+	DeductMoney(int64, int64) (error, bool)
+}
+
+//Shopping 购买商品 传入user service
+func (self *Product) Shopping(userId, productId int64, udm userDeductMoney) (shortage bool, e error) {
 	cmdPt := new(dao_cmd.ProductGet).Gotree(productId)
 	pt := dao_value.ProductGet{}
 	//查询商品价格
@@ -33,22 +38,8 @@ func (self *Product) Shopping(userId, productId int64) (shortage bool, e error) 
 		return
 	}
 
-	//获取用户
-	cmdUser := new(dao_cmd.UserGet).Gotree(userId)
-	user := dao_value.UserGet{}
-	e = self.CallDao(cmdUser, &user)
-	if e != nil {
-		return
-	}
-	if user.Money < pt.Price {
-		//金钱不足
-		shortage = true
-		return
-	}
-
-	//扣用户账户余额
-	subPrice := new(dao_cmd.UserMoneyAdd).Gotree(userId, -pt.Price)
-	if e = self.CallDao(subPrice, &helper.VoidValue{}); e != nil {
+	e, shortage = udm.DeductMoney(userId, pt.Price)
+	if e != nil || shortage {
 		return
 	}
 

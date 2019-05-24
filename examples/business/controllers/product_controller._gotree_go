@@ -51,15 +51,17 @@ func (self *ProductController) Store(cmd business_cmd.Store, result *business_va
 	return
 }
 
-// Shopping 商品列表
+// Shopping 购买商品
 func (self *ProductController) Shopping(cmd business_cmd.Shopping, result *business_value.Shopping) (e error) {
 	var (
 		productSer *service.Product
+		userSer    *service.User
 	)
 	*result = business_value.Shopping{}
 
 	self.Service(&productSer)
-	shortage, e := productSer.Shopping(cmd.UserId, cmd.ProductId)
+	self.Service(&userSer)
+	shortage, e := productSer.Shopping(cmd.UserId, cmd.ProductId, userSer)
 	if e != nil {
 		return
 	}

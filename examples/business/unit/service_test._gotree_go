@@ -11,13 +11,6 @@ import (
 	测试service对象，请在本机开启dao 进程。 TestOn : "Com组件名字:id", id对应com.conf的分布式id，单元测试默认1
 */
 
-func TestProduct(t *testing.T) {
-	service := new(service.Product).Gotree()
-	service.TestOn("Product:1", "User:1", "Order:1")
-	t.Log(service.Store())
-	t.Log(service.Shopping(1, 1))
-}
-
 func TestUser(t *testing.T) {
 	service := new(service.User).Gotree()
 	service.TestOn("Product:1", "User:1", "Order:1")

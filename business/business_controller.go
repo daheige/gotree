@@ -48,9 +48,9 @@ func (self *BusinessController) Gotree(child interface{}) *BusinessController {
 	return self
 }
 
-//服务定位器获取服务
+//服务定位器获取创建服务
 func (self *BusinessController) Service(child interface{}) {
-	err := _scl.Service(child)
+	err := _scl.MakeService(child)
 	if err != nil {
 		helper.Exit("BusinessController-Service Service not found error:" + err.Error())
 	}

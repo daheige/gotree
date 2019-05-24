@@ -23,6 +23,27 @@ func (self *User) Gotree() *User {
 	return self
 }
 
+// DeductMoney 扣款
+func (self *User) DeductMoney(userId int64, productPrice int64) (e error, shortage bool) {
+	//获取用户
+	cmdUser := new(dao_cmd.UserGet).Gotree(userId)
+	user := dao_value.UserGet{}
+	e = self.CallDao(cmdUser, &user)
+	if e != nil {
+		return
+	}
+	if user.Money < productPrice {
+		//金钱不足
+		shortage = true
+		return
+	}
+
+	//扣用户账户余额
+	subPrice := new(dao_cmd.UserMoneyAdd).Gotree(userId, -productPrice)
+	e = self.CallDao(subPrice, &helper.VoidValue{})
+	return
+}
+
 // Register 注册
 func (self *User) Register(userName string) (userId int64, e error) {
 	//读取cmd头

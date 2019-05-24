@@ -26,22 +26,16 @@ import (
 
 type BusinessService struct {
 	lib.Object
-	_openService bool
-	_head        remote_call.RpcHeader
+	_head remote_call.RpcHeader
 }
 
 func (self *BusinessService) Gotree(child interface{}) *BusinessService {
 	self.Object.Gotree(self)
 	self.AddChild(self, child)
-	self._openService = false
 	return self
 }
 
 func (self *BusinessService) CallDao(obj interface{}, reply interface{}) error {
-	//禁止重复实例化
-	if !self._openService {
-		helper.Exit("BusinessService-CallDao Prohibit duplicate instantiation")
-	}
 	var client *remote_call.RpcClient
 	if e := _ssl.GetComponent(&client); e != nil {
 		return e
@@ -74,7 +68,6 @@ func (self *BusinessService) TestOn(testDaos ...string) {
 		os.Exit(-1)
 	}
 	rpc.GoDict().Set("gseq", "ServiceUnit")
-	self._openService = true
 
 	var im *remote_call.InnerMaster
 	_ssl.GetComponent(&im)
@@ -84,14 +77,5 @@ func (self *BusinessService) TestOn(testDaos ...string) {
 		id, _ := strconv.Atoi(daoNameId[1])
 		im.LocalAddNode(daoNameId[0], "127.0.0.1", "6666", id)
 	}
-	return
-}
-
-func (self *BusinessService) OpenService() {
-	exist := _scl.CheckService(self.TopChild())
-	if exist {
-		helper.Exit("BusinessService-OpenService Prohibit duplicate instantiation")
-	}
-	self._openService = true
 	return
 }
