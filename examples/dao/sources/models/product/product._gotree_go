@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/8treenet/gotree/dao"
-	"github.com/8treenet/gotree/dao/gtorm"
+	"github.com/8treenet/gotree/dao/model"
 	"github.com/8treenet/gotree/helper"
 )
 
@@ -45,7 +45,7 @@ func (self *Product) Get(id int64) (product struct {
 	Desc  string
 }, e error) {
 	e = self.Conn().Raw("SELECT id,price,`desc` FROM `product` where id = ?", id).QueryRow(&product)
-	if e == gtorm.ErrNoRows {
+	if e == model.ErrNoRows {
 		helper.Log().Notice("ErrNoRows")
 	}
 	return

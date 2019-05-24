@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/8treenet/gotree/dao"
-	"github.com/8treenet/gotree/dao/gtorm"
+	"github.com/8treenet/gotree/dao/model"
 	"github.com/8treenet/gotree/helper"
 )
 
@@ -59,7 +59,7 @@ func (self *User) Get(uid int64) (result struct {
 	UnderScoreCase string
 }, e error) {
 	e = self.Conn().Raw("SELECT id,name,money,camelCase,under_score_case FROM `user` where id = ?", uid).QueryRow(&result)
-	if e == gtorm.ErrNoRows {
+	if e == model.ErrNoRows {
 		helper.Log().Notice("ErrNoRows")
 	}
 	return

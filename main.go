@@ -93,8 +93,11 @@ func newProject() {
 	if project == "new" {
 		return
 	}
-
 	gopath := os.Getenv("GOPATH")
+	if helper.FileExists(gopath + "/src/" + project) {
+		fmt.Println(fmt.Sprintf("\x1b[0;%dm%s\x1b[0m", 31, os.Args[len(os.Args)-1]+" already exists."))
+		return
+	}
 	cmd := exec.Command("cp", "-r", gopath+"/src/github.com/8treenet/gotree/examples", gopath+"/src/"+project)
 	_, err := cmd.Output()
 	if err != nil {

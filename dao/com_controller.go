@@ -19,7 +19,7 @@ import (
 
 	"github.com/8treenet/gotree/helper"
 
-	"github.com/8treenet/gotree/dao/gtorm"
+	"github.com/8treenet/gotree/dao/model"
 	"github.com/8treenet/gotree/remote_call"
 )
 
@@ -108,7 +108,7 @@ func (self *ComController) Other(child interface{}) {
 
 //Transaction 事务
 func (self *ComController) Transaction(fun func() error) error {
-	return gtorm.Transaction(self.selfName, fun)
+	return model.Transaction(self.selfName, fun)
 }
 
 //Queue 队列处理

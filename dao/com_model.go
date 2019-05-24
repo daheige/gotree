@@ -17,7 +17,7 @@ package dao
 import (
 	"fmt"
 
-	"github.com/8treenet/gotree/dao/gtorm"
+	"github.com/8treenet/gotree/dao/model"
 	"github.com/8treenet/gotree/helper"
 	"github.com/8treenet/gotree/lib"
 	"github.com/8treenet/gotree/lib/chart"
@@ -57,7 +57,7 @@ func (self *ComModel) Gotree(child interface{}) *ComModel {
 }
 
 type Conn interface {
-	Raw(query string, args ...interface{}) gtorm.RawSeter
+	Raw(query string, args ...interface{}) model.RawSeter
 }
 
 //Orm 获取orm
@@ -69,8 +69,8 @@ func (self *ComModel) Conn() Conn {
 		helper.Exit("ComModel-Conn This is an unregistered com")
 		return nil
 	}
-	o := gtorm.New(self.comName)
-	if modelProfiler && o.Driver().Type() == gtorm.DRMySQL {
+	o := model.New(self.comName)
+	if modelProfiler && o.Driver().Type() == model.DRMySQL {
 		o.RawCallBack(func(sql string, args []interface{}) {
 			self.profiler(sql, args...)
 		})
@@ -132,7 +132,7 @@ func (self *ComModel) ormOn() {
 			continue
 		}
 		findSucess = true
-		_, err := gtorm.GetDB(self.comName)
+		_, err := model.GetDB(self.comName)
 		if err == nil {
 			//已注册
 			return
@@ -150,7 +150,7 @@ func (self *ComModel) ormOn() {
 			helper.Exit("ComModel Failure to connect " + self.comName + " db, MaxIdleConns or MaxOpenConns are invalid args")
 		}
 		helper.Log().Notice("ComModel Connect com " + self.comName + " database, MaxIdleConns:" + dbMaxIdleConns + ", MaxOpenConns:" + dbMaxOpenConns + ", config:" + dbconfig)
-		err = gtorm.RegisterDataBase(self.comName, driver, dbconfig, maxIdleConns, maxOpenConns)
+		err = model.RegisterDataBase(self.comName, driver, dbconfig, maxIdleConns, maxOpenConns)
 		if err != nil {
 			helper.Exit("ComModel-RegisterDataBase Connect " + self.comName + " error:," + err.Error())
 		}
@@ -221,7 +221,7 @@ func (self *ComModel) profiler(ssql string, args ...interface{}) {
 		Type  string
 	}
 	explainLog := ""
-	o := gtorm.New(self.comName)
+	o := model.New(self.comName)
 	_, e := o.Raw("EXPLAIN "+ssql, args...).QueryRows(&explain)
 	tables := []string{}
 	warn := false
@@ -291,7 +291,7 @@ func (self *ComModel) Connections(m map[string]int) {
 	if !self.open {
 		return
 	}
-	db, err := gtorm.GetDB(self.comName)
+	db, err := model.GetDB(self.comName)
 	if err != nil {
 		return
 	}

@@ -1,4 +1,4 @@
-package gtorm
+package model
 
 import (
 	"errors"

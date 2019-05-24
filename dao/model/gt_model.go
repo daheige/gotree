@@ -1,4 +1,4 @@
-package gtorm
+package model
 
 import (
 	"database/sql"
@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -165,38 +166,6 @@ func (o *orm) setPk(mi *modelInfo, ind reflect.Value, id int64) {
 	}
 }
 
-// get QuerySeter for related models to md model
-func (o *orm) queryRelated(md interface{}, name string) (*modelInfo, *fieldInfo, reflect.Value, QuerySeter) {
-	mi, ind := o.getMiInd(md, true)
-	fi := o.getFieldInfo(mi, name)
-
-	_, _, exist := getExistPk(mi, ind)
-	if !exist {
-		panic(ErrMissPK)
-	}
-
-	var qs *querySet
-
-	switch fi.fieldType {
-	case RelOneToOne, RelForeignKey, RelManyToMany:
-		if !fi.inModel {
-			break
-		}
-		qs = o.getRelQs(md, mi, fi)
-	case RelReverseOne, RelReverseMany:
-		if !fi.inModel {
-			break
-		}
-		qs = o.getReverseQs(md, mi, fi)
-	}
-
-	if qs == nil {
-		panic(fmt.Errorf("<Ormer> name `%s` for model `%s` is not an available rel/reverse field", md, name))
-	}
-
-	return mi, fi, ind, qs
-}
-
 // get reverse relation QuerySeter
 func (o *orm) getReverseQs(md interface{}, mi *modelInfo, fi *fieldInfo) *querySet {
 	switch fi.fieldType {
@@ -313,7 +282,6 @@ func (o *orm) Driver() Driver {
 
 // NewOrm create new orm
 func newOrm() Ormer {
-	BootStrap() // execute only once
 	return new(orm)
 }
 
@@ -1474,3 +1442,442 @@ func newQuerySet(orm *orm, mi *modelInfo) QuerySeter {
 	o.orm = orm
 	return o
 }
+
+const (
+	defaultStructTagName  = "orm"
+	defaultStructTagDelim = ";"
+)
+
+var (
+	modelCache = &_modelCache{
+		cache:           make(map[string]*modelInfo),
+		cacheByFullName: make(map[string]*modelInfo),
+	}
+)
+
+// model info collection
+type _modelCache struct {
+	sync.RWMutex    // only used outsite for bootStrap
+	orders          []string
+	cache           map[string]*modelInfo
+	cacheByFullName map[string]*modelInfo
+	done            bool
+}
+
+// get all model info
+func (mc *_modelCache) all() map[string]*modelInfo {
+	m := make(map[string]*modelInfo, len(mc.cache))
+	for k, v := range mc.cache {
+		m[k] = v
+	}
+	return m
+}
+
+// get orderd model info
+func (mc *_modelCache) allOrdered() []*modelInfo {
+	m := make([]*modelInfo, 0, len(mc.orders))
+	for _, table := range mc.orders {
+		m = append(m, mc.cache[table])
+	}
+	return m
+}
+
+// get model info by table name
+func (mc *_modelCache) get(table string) (mi *modelInfo, ok bool) {
+	mi, ok = mc.cache[table]
+	return
+}
+
+// get model info by full name
+func (mc *_modelCache) getByFullName(name string) (mi *modelInfo, ok bool) {
+	mi, ok = mc.cacheByFullName[name]
+	return
+}
+
+// set model info to collection
+func (mc *_modelCache) set(table string, mi *modelInfo) *modelInfo {
+	mii := mc.cache[table]
+	mc.cache[table] = mi
+	mc.cacheByFullName[mi.fullName] = mi
+	if mii == nil {
+		mc.orders = append(mc.orders, table)
+	}
+	return mii
+}
+
+// clean all model info.
+func (mc *_modelCache) clean() {
+	mc.orders = make([]string, 0)
+	mc.cache = make(map[string]*modelInfo)
+	mc.cacheByFullName = make(map[string]*modelInfo)
+	mc.done = false
+}
+
+// ResetModelCache Clean model cache. Then you can re-RegisterModel.
+// Common use this api for test case.
+func ResetModelCache() {
+	modelCache.clean()
+}
+
+// get reflect.Type name with package path.
+func getFullName(typ reflect.Type) string {
+	return typ.PkgPath() + "." + typ.Name()
+}
+
+// getTableName get struct table name.
+// If the struct implement the TableName, then get the result as tablename
+// else use the struct name which will apply snakeString.
+func getTableName(val reflect.Value) string {
+	if fun := val.MethodByName("TableName"); fun.IsValid() {
+		vals := fun.Call([]reflect.Value{})
+		// has return and the first val is string
+		if len(vals) > 0 && vals[0].Kind() == reflect.String {
+			return vals[0].String()
+		}
+	}
+	return snakeString(reflect.Indirect(val).Type().Name())
+}
+
+// get table engine, mysiam or innodb.
+func getTableEngine(val reflect.Value) string {
+	fun := val.MethodByName("TableEngine")
+	if fun.IsValid() {
+		vals := fun.Call([]reflect.Value{})
+		if len(vals) > 0 && vals[0].Kind() == reflect.String {
+			return vals[0].String()
+		}
+	}
+	return ""
+}
+
+// get table index from method.
+func getTableIndex(val reflect.Value) [][]string {
+	fun := val.MethodByName("TableIndex")
+	if fun.IsValid() {
+		vals := fun.Call([]reflect.Value{})
+		if len(vals) > 0 && vals[0].CanInterface() {
+			if d, ok := vals[0].Interface().([][]string); ok {
+				return d
+			}
+		}
+	}
+	return nil
+}
+
+// get table unique from method
+func getTableUnique(val reflect.Value) [][]string {
+	fun := val.MethodByName("TableUnique")
+	if fun.IsValid() {
+		vals := fun.Call([]reflect.Value{})
+		if len(vals) > 0 && vals[0].CanInterface() {
+			if d, ok := vals[0].Interface().([][]string); ok {
+				return d
+			}
+		}
+	}
+	return nil
+}
+
+// get snaked column name
+func getColumnName(ft int, addrField reflect.Value, sf reflect.StructField, col string) string {
+	column := col
+	if col == "" {
+		//column = snakeString(sf.Name)
+		column = sf.Name
+	}
+	switch ft {
+	case RelForeignKey, RelOneToOne:
+		if len(col) == 0 {
+			column = column + "_id"
+		}
+	case RelManyToMany, RelReverseMany, RelReverseOne:
+		column = sf.Name
+	}
+	return column
+}
+
+// return field type as type constant from reflect.Value
+func getFieldType(val reflect.Value) (ft int, err error) {
+	switch val.Type() {
+	case reflect.TypeOf(new(int8)):
+		ft = TypeBitField
+	case reflect.TypeOf(new(int16)):
+		ft = TypeSmallIntegerField
+	case reflect.TypeOf(new(int32)),
+		reflect.TypeOf(new(int)):
+		ft = TypeIntegerField
+	case reflect.TypeOf(new(int64)):
+		ft = TypeBigIntegerField
+	case reflect.TypeOf(new(uint8)):
+		ft = TypePositiveBitField
+	case reflect.TypeOf(new(uint16)):
+		ft = TypePositiveSmallIntegerField
+	case reflect.TypeOf(new(uint32)),
+		reflect.TypeOf(new(uint)):
+		ft = TypePositiveIntegerField
+	case reflect.TypeOf(new(uint64)):
+		ft = TypePositiveBigIntegerField
+	case reflect.TypeOf(new(float32)),
+		reflect.TypeOf(new(float64)):
+		ft = TypeFloatField
+	case reflect.TypeOf(new(bool)):
+		ft = TypeBooleanField
+	case reflect.TypeOf(new(string)):
+		ft = TypeCharField
+	case reflect.TypeOf(new(time.Time)):
+		ft = TypeDateTimeField
+	default:
+		elm := reflect.Indirect(val)
+		switch elm.Kind() {
+		case reflect.Int8:
+			ft = TypeBitField
+		case reflect.Int16:
+			ft = TypeSmallIntegerField
+		case reflect.Int32, reflect.Int:
+			ft = TypeIntegerField
+		case reflect.Int64:
+			ft = TypeBigIntegerField
+		case reflect.Uint8:
+			ft = TypePositiveBitField
+		case reflect.Uint16:
+			ft = TypePositiveSmallIntegerField
+		case reflect.Uint32, reflect.Uint:
+			ft = TypePositiveIntegerField
+		case reflect.Uint64:
+			ft = TypePositiveBigIntegerField
+		case reflect.Float32, reflect.Float64:
+			ft = TypeFloatField
+		case reflect.Bool:
+			ft = TypeBooleanField
+		case reflect.String:
+			ft = TypeCharField
+		default:
+			if elm.Interface() == nil {
+				panic(fmt.Errorf("%s is nil pointer, may be miss setting tag", val))
+			}
+			switch elm.Interface().(type) {
+			case sql.NullInt64:
+				ft = TypeBigIntegerField
+			case sql.NullFloat64:
+				ft = TypeFloatField
+			case sql.NullBool:
+				ft = TypeBooleanField
+			case sql.NullString:
+				ft = TypeCharField
+			case time.Time:
+				ft = TypeDateTimeField
+			}
+		}
+	}
+	if ft&IsFieldType == 0 {
+		err = fmt.Errorf("unsupport field type %s, may be miss setting tag", val)
+	}
+	return
+}
+
+var supportTag = map[string]int{
+	"-":            1,
+	"null":         1,
+	"index":        1,
+	"unique":       1,
+	"pk":           1,
+	"auto":         1,
+	"auto_now":     1,
+	"auto_now_add": 1,
+	"size":         2,
+	"column":       2,
+	"default":      2,
+	"rel":          2,
+	"reverse":      2,
+	"rel_table":    2,
+	"rel_through":  2,
+	"digits":       2,
+	"decimals":     2,
+	"on_delete":    2,
+	"type":         2,
+}
+
+func parseStructTag(data string) (attrs map[string]bool, tags map[string]string) {
+	attrs = make(map[string]bool)
+	tags = make(map[string]string)
+	for _, v := range strings.Split(data, defaultStructTagDelim) {
+		if v == "" {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if t := strings.ToLower(v); supportTag[t] == 1 {
+			attrs[t] = true
+		} else if i := strings.Index(v, "("); i > 0 && strings.Index(v, ")") == len(v)-1 {
+			name := t[:i]
+			if supportTag[name] == 2 {
+				v = v[i+1 : len(v)-1]
+				tags[name] = v
+			}
+		} else {
+
+		}
+	}
+	return
+}
+
+// single model info
+type modelInfo struct {
+	pkg       string
+	name      string
+	fullName  string
+	table     string
+	model     interface{}
+	fields    *fields
+	manual    bool
+	addrField reflect.Value //store the original struct value
+	uniques   []string
+	isThrough bool
+}
+
+type fields struct {
+	pk            *fieldInfo
+	columns       map[string]*fieldInfo
+	fields        map[string]*fieldInfo
+	fieldsLow     map[string]*fieldInfo
+	fieldsByType  map[int][]*fieldInfo
+	fieldsRel     []*fieldInfo
+	fieldsReverse []*fieldInfo
+	fieldsDB      []*fieldInfo
+	rels          []*fieldInfo
+	orders        []string
+	dbcols        []string
+}
+
+// add field info
+func (f *fields) Add(fi *fieldInfo) (added bool) {
+	if f.fields[fi.name] == nil && f.columns[fi.column] == nil {
+		f.columns[fi.column] = fi
+		f.fields[fi.name] = fi
+		f.fieldsLow[strings.ToLower(fi.name)] = fi
+	} else {
+		return
+	}
+	if _, ok := f.fieldsByType[fi.fieldType]; !ok {
+		f.fieldsByType[fi.fieldType] = make([]*fieldInfo, 0)
+	}
+	f.fieldsByType[fi.fieldType] = append(f.fieldsByType[fi.fieldType], fi)
+	f.orders = append(f.orders, fi.column)
+	if fi.dbcol {
+		f.dbcols = append(f.dbcols, fi.column)
+		f.fieldsDB = append(f.fieldsDB, fi)
+	}
+	if fi.rel {
+		f.fieldsRel = append(f.fieldsRel, fi)
+	}
+	if fi.reverse {
+		f.fieldsReverse = append(f.fieldsReverse, fi)
+	}
+	return true
+}
+
+// get field info by name
+func (f *fields) GetByName(name string) *fieldInfo {
+	return f.fields[name]
+}
+
+// get field info by column name
+func (f *fields) GetByColumn(column string) *fieldInfo {
+	return f.columns[column]
+}
+
+// get field info by string, name is prior
+func (f *fields) GetByAny(name string) (*fieldInfo, bool) {
+	if fi, ok := f.fields[name]; ok {
+		return fi, ok
+	}
+	if fi, ok := f.fieldsLow[strings.ToLower(name)]; ok {
+		return fi, ok
+	}
+	if fi, ok := f.columns[name]; ok {
+		return fi, ok
+	}
+	return nil, false
+}
+
+// create new field info collection
+func newFields() *fields {
+	f := new(fields)
+	f.fields = make(map[string]*fieldInfo)
+	f.fieldsLow = make(map[string]*fieldInfo)
+	f.columns = make(map[string]*fieldInfo)
+	f.fieldsByType = make(map[int][]*fieldInfo)
+	return f
+}
+
+// single field info
+type fieldInfo struct {
+	mi                  *modelInfo
+	fieldIndex          []int
+	fieldType           int
+	dbcol               bool // table column fk and onetoone
+	inModel             bool
+	name                string
+	fullName            string
+	column              string
+	addrValue           reflect.Value
+	sf                  reflect.StructField
+	auto                bool
+	pk                  bool
+	null                bool
+	index               bool
+	unique              bool
+	colDefault          bool  // whether has default tag
+	initial             StrTo // store the default value
+	size                int
+	toText              bool
+	autoNow             bool
+	autoNowAdd          bool
+	rel                 bool // if type equal to RelForeignKey, RelOneToOne, RelManyToMany then true
+	reverse             bool
+	reverseField        string
+	reverseFieldInfo    *fieldInfo
+	reverseFieldInfoTwo *fieldInfo
+	reverseFieldInfoM2M *fieldInfo
+	relTable            string
+	relThrough          string
+	relThroughModelInfo *modelInfo
+	relModelInfo        *modelInfo
+	digits              int
+	decimals            int
+	isFielder           bool // implement Fielder interface
+	onDelete            string
+}
+
+const (
+	TypeBooleanField = 1 << iota
+	TypeCharField
+	TypeTextField
+	TypeTimeField
+	TypeDateField
+	TypeDateTimeField
+	TypeBitField
+	TypeSmallIntegerField
+	TypeIntegerField
+	TypeBigIntegerField
+	TypePositiveBitField
+	TypePositiveSmallIntegerField
+	TypePositiveIntegerField
+	TypePositiveBigIntegerField
+	TypeFloatField
+	TypeDecimalField
+	TypeJSONField
+	TypeJsonbField
+	RelForeignKey
+	RelOneToOne
+	RelManyToMany
+	RelReverseOne
+	RelReverseMany
+)
+
+// Define some logic enum
+const (
+	IsIntegerField         = ^-TypePositiveBigIntegerField >> 5 << 6
+	IsPositiveIntegerField = ^-TypePositiveBigIntegerField >> 9 << 10
+	IsRelField             = ^-RelReverseMany >> 17 << 18
+	IsFieldType            = ^-RelReverseMany<<1 + 1
+)

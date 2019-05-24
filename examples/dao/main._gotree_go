@@ -4,12 +4,12 @@ import (
 	_ "examples/dao/controllers"
 
 	"github.com/8treenet/gotree/dao"
-	"github.com/8treenet/gotree/dao/gtorm"
+	"github.com/8treenet/gotree/dao/model"
 	_ "github.com/go-sql-driver/mysql"
 )
 
 func init() {
-	gtorm.RegisterDriver("mysql", gtorm.DRMySQL)
+	model.RegisterDriver("mysql", model.DRMySQL)
 }
 
 func main() {
