@@ -32,77 +32,72 @@ func NewMap(dst interface{}) error {
 }
 
 // Memcpy
-func Memcpy(toValue interface{}, fromValue interface{}) (err error) {
+func Memcpy(dest interface{}, src interface{}) (err error) {
 	var (
-		isSlice bool
-		amount  = 1
-		from    = indirect(reflect.ValueOf(fromValue))
-		to      = indirect(reflect.ValueOf(toValue))
+		isSlice  bool
+		sliceLen = 1
+		srcVal   = indirect(reflect.ValueOf(src))
+		destVal  = indirect(reflect.ValueOf(dest))
 	)
 
-	if !to.CanAddr() {
-		return errors.New("copy to value is unaddressable")
+	if !destVal.CanAddr() {
+		return errors.New("copy dest value is unaddressable")
 	}
 
-	// Return is from value is invalid
-	if !from.IsValid() {
+	if !srcVal.IsValid() {
 		return
 	}
 
-	// Just set it if possible to assign
-	if from.Type().AssignableTo(to.Type()) {
-		to.Set(from)
+	if srcVal.Type().AssignableTo(destVal.Type()) {
+		destVal.Set(srcVal)
 		return
 	}
 
-	fromType := indirectType(from.Type())
-	toType := indirectType(to.Type())
+	srcValType := indirectType(srcVal.Type())
+	destType := indirectType(destVal.Type())
 
-	if fromType.Kind() != reflect.Struct || toType.Kind() != reflect.Struct {
+	if srcValType.Kind() != reflect.Struct || destType.Kind() != reflect.Struct {
 		return
 	}
 
-	if to.Kind() == reflect.Slice {
+	if destVal.Kind() == reflect.Slice {
 		isSlice = true
-		if from.Kind() == reflect.Slice {
-			amount = from.Len()
+		if srcVal.Kind() == reflect.Slice {
+			sliceLen = srcVal.Len()
 		}
 	}
 
-	for i := 0; i < amount; i++ {
+	for i := 0; i < sliceLen; i++ {
 		var dest, source reflect.Value
 
 		if isSlice {
 			// source
-			if from.Kind() == reflect.Slice {
-				source = indirect(from.Index(i))
+			if srcVal.Kind() == reflect.Slice {
+				source = indirect(srcVal.Index(i))
 			} else {
-				source = indirect(from)
+				source = indirect(srcVal)
 			}
 
 			// dest
-			dest = indirect(reflect.New(toType).Elem())
+			dest = indirect(reflect.New(destType).Elem())
 		} else {
-			source = indirect(from)
-			dest = indirect(to)
+			source = indirect(srcVal)
+			dest = indirect(destVal)
 		}
 
-		// Copy from field to field or method
-		for _, field := range deepFields(fromType) {
+		for _, field := range deepFields(srcValType) {
 			name := field.Name
 
-			if fromField := source.FieldByName(name); fromField.IsValid() {
-				// has field
+			if srcValField := source.FieldByName(name); srcValField.IsValid() {
 				if toField := dest.FieldByName(name); toField.IsValid() {
 					if toField.CanSet() {
-						if !set(toField, fromField) {
-							if err := Memcpy(toField.Addr().Interface(), fromField.Interface()); err != nil {
+						if !set(toField, srcValField) {
+							if err := Memcpy(toField.Addr().Interface(), srcValField.Interface()); err != nil {
 								return err
 							}
 						}
 					}
 				} else {
-					// try to set to method
 					var toMethod reflect.Value
 					if dest.CanAddr() {
 						toMethod = dest.Addr().MethodByName(name)
@@ -110,27 +105,26 @@ func Memcpy(toValue interface{}, fromValue interface{}) (err error) {
 						toMethod = dest.MethodByName(name)
 					}
 
-					if toMethod.IsValid() && toMethod.Type().NumIn() == 1 && fromField.Type().AssignableTo(toMethod.Type().In(0)) {
-						toMethod.Call([]reflect.Value{fromField})
+					if toMethod.IsValid() && toMethod.Type().NumIn() == 1 && srcValField.Type().AssignableTo(toMethod.Type().In(0)) {
+						toMethod.Call([]reflect.Value{srcValField})
 					}
 				}
 			}
 		}
 
-		// Copy from method to field
-		for _, field := range deepFields(toType) {
+		for _, field := range deepFields(destType) {
 			name := field.Name
 
-			var fromMethod reflect.Value
+			var srcValMethod reflect.Value
 			if source.CanAddr() {
-				fromMethod = source.Addr().MethodByName(name)
+				srcValMethod = source.Addr().MethodByName(name)
 			} else {
-				fromMethod = source.MethodByName(name)
+				srcValMethod = source.MethodByName(name)
 			}
 
-			if fromMethod.IsValid() && fromMethod.Type().NumIn() == 0 && fromMethod.Type().NumOut() == 1 {
+			if srcValMethod.IsValid() && srcValMethod.Type().NumIn() == 0 && srcValMethod.Type().NumOut() == 1 {
 				if toField := dest.FieldByName(name); toField.IsValid() && toField.CanSet() {
-					values := fromMethod.Call([]reflect.Value{})
+					values := srcValMethod.Call([]reflect.Value{})
 					if len(values) >= 1 {
 						set(toField, values[0])
 					}
@@ -139,10 +133,10 @@ func Memcpy(toValue interface{}, fromValue interface{}) (err error) {
 		}
 
 		if isSlice {
-			if dest.Addr().Type().AssignableTo(to.Type().Elem()) {
-				to.Set(reflect.Append(to, dest.Addr()))
-			} else if dest.Type().AssignableTo(to.Type().Elem()) {
-				to.Set(reflect.Append(to, dest))
+			if dest.Addr().Type().AssignableTo(destVal.Type().Elem()) {
+				destVal.Set(reflect.Append(destVal, dest.Addr()))
+			} else if dest.Type().AssignableTo(destVal.Type().Elem()) {
+				destVal.Set(reflect.Append(destVal, dest))
 			}
 		}
 	}
@@ -180,28 +174,27 @@ func indirectType(reflectType reflect.Type) reflect.Type {
 	return reflectType
 }
 
-func set(to, from reflect.Value) bool {
-	if from.IsValid() {
-		if to.Kind() == reflect.Ptr {
-			//set `to` to nil if from is nil
-			if from.Kind() == reflect.Ptr && from.IsNil() {
-				to.Set(reflect.Zero(to.Type()))
+func set(destVal, srcVal reflect.Value) bool {
+	if srcVal.IsValid() {
+		if destVal.Kind() == reflect.Ptr {
+			if srcVal.Kind() == reflect.Ptr && srcVal.IsNil() {
+				destVal.Set(reflect.Zero(destVal.Type()))
 				return true
-			} else if to.IsNil() {
-				to.Set(reflect.New(to.Type().Elem()))
+			} else if destVal.IsNil() {
+				destVal.Set(reflect.New(destVal.Type().Elem()))
 			}
-			to = to.Elem()
+			destVal = destVal.Elem()
 		}
 
-		if from.Type().ConvertibleTo(to.Type()) {
-			to.Set(from.Convert(to.Type()))
-		} else if scanner, ok := to.Addr().Interface().(sql.Scanner); ok {
-			err := scanner.Scan(from.Interface())
+		if srcVal.Type().ConvertibleTo(destVal.Type()) {
+			destVal.Set(srcVal.Convert(destVal.Type()))
+		} else if scanner, ok := destVal.Addr().Interface().(sql.Scanner); ok {
+			err := scanner.Scan(srcVal.Interface())
 			if err != nil {
 				return false
 			}
-		} else if from.Kind() == reflect.Ptr {
-			return set(to, from.Elem())
+		} else if srcVal.Kind() == reflect.Ptr {
+			return set(destVal, srcVal.Elem())
 		} else {
 			return false
 		}
