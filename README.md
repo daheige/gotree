@@ -1,6 +1,7 @@
-[![Go Report Card](https://goreportcard.com/badge/github.com/8treenet/gotree)](https://goreportcard.com/report/github.com/8treenet/gotree) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/8treenet/gotree/blob/master/LICENSE) [![Build Status](https://travis-ci.org/8treenet/gotree.svg?branch=master)](https://travis-ci.org/8treenet/gotree)
-
 # gotree
+
+[![Go Report Card](https://goreportcard.com/badge/github.com/8treenet/gotree)](https://goreportcard.com/report/github.com/8treenet/gotree) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/8treenet/gotree/blob/master/LICENSE) [![Build Status](https://travis-ci.org/8treenet/gotree.svg?branch=master)](https://travis-ci.org/8treenet/gotree) [![GoDoc](https://godoc.org/github.com/8treenet/gotree?status.svg)](https://godoc.org/github.com/8treenet/gotree)
+
 <img align="right" width="230px" src="https://raw.githubusercontent.com/8treenet/blog/master/img/4_Grayscale_logo_on_transparent_1024.png">
 gotree 是一个垂直分布式框架。 gotree 的目标是轻松开发分布式服务，解放开发者心智负担。
 
