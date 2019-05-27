@@ -1,4 +1,4 @@
-[![Go Report Card](https://goreportcard.com/badge/github.com/8treenet/gotree)](https://goreportcard.com/report/github.com/8treenet/gotree) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/8treenet/gotree/blob/master/LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/8treenet/gotree)](https://goreportcard.com/report/github.com/8treenet/gotree) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/8treenet/gotree/blob/master/LICENSE) [![Build Status](https://travis-ci.org/8treenet/gotree.svg?branch=master)](https://travis-ci.org/8treenet/gotree)
 
 # gotree
 <img align="right" width="230px" src="https://raw.githubusercontent.com/8treenet/blog/master/img/4_Grayscale_logo_on_transparent_1024.png">
